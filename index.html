@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <title>건축 3D 뷰어</title>
+    <style>
+      body { margin: 0; }
+      canvas { display: block; }
+      .cube-label {
+        color:rgba(255,255,255,0.5);
+        font-size: 11px
+        font-family: sans-serif;
+        text-align: center;
+        padding: 2px 0;
+      }
+      .cube-divider {
+        height: 1px;
+        background: rgba(255,25,,25,,0.2);
+        margin: 3px 0;
+      }
+      
+      #controls {
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        background: rgba(0,0,0,0.6);
+        padding: 15px;
+        border-radius: 12px;
+        color: white;
+        font-size: 14px;
+        font-family: sans-serif;
+        min-width: 200px;
+      }
+      button {
+        padding: 8px 16px;
+        background: rgba(255,255,255,0.2);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      button:hover { background: rgba(255,255,255,0.3); }
+      button.active { background: rgba(255,165,0,0.8); }
+      .slider-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      input[type=range] {
+        width: 100%;
+        cursor: pointer;
+      }
+
+      #viewcube {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        background: rgba(0,0,0,0.6);
+        padding: 10px;
+        border-radius: 12px;
+        font-family: sans-serif;
+      }
+      .cube-face {
+        padding: 8px 16px;
+        color: white;
+        font-size: 12px;
+        font-weight: bold;
+        border-radius: 6px;
+        cursor: pointer;
+        text-align: center;
+        background: rgba(255,255,255,0.15);
+        border: 1px solid rgba(255,255,255,0.2);
+      }
+      .cube-face:hover { background: rgba(255,255,255,0.3); }
+      .cube-face.active { background: rgba(255,165,0,0.8); }
+    </style>
+  </head>
+  <body>
+
+    <div id="controls">
+      <button id="btn-sun" class="active">☀️ 외부 조명 ON</button>
+      <div class="slider-row">
+        <label>외부 밝기: <span id="sun-value">3</span></label>
+        <input type="range" id="slider-sun" min="0" max="10" step="0.1" value="3">
+      </div>
+      <button id="btn-indoor">💡 실내 조명 OFF</button>
+      <div class="slider-row">
+        <label>실내 밝기: <span id="indoor-value">5</span></label>
+        <input type="range" id="slider-indoor" min="0" max="10" step="0.1" value="5">
+      </div>
+    </div>
+
+    <div id="viewcube">
+     <div class="cube-label">📐 VIEW</div>
+     <div class="cube-face iso active" data-view="iso">ISO</div>
+     <div class="cube-divider"></div>
+     <div class="cube-label">평면/입면</div>
+     <div class="cube-face top" data-view="top">TOP</div>
+     <div class="cube-face front" data-view="front">FRONT</div>
+     <div class="cube-face back" data-view="back">BACK</div>
+     <div class="cube-face right" data-view="right">RIGHT</div>
+     <div class="cube-face left" data-view="left">LEFT</div>
+     <div class="cube-face bottom" data-view="bottom">BOTTOM</div>
+     <div class="cube-divider"></div>
+     <div class="cube-label">축 방향</div>
+     <div class="cube-face" data-view="x-pos">+X →</div>
+     <div class="cube-face" data-view="x-neg">-X ←</div>
+     <div class="cube-face" data-view="y-pos">+Y ↑</div>
+     <div class="cube-face" data-view="y-neg">-Y ↓</div>
+     <div class="cube-face" data-view="z-pos">+Z ↗</div>
+     <div class="cube-face" data-view="z-neg">-Z ↙</div>
+    </div>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
