@@ -54,11 +54,11 @@ scene.add(ambientLight);
 
 // OBJ 모델 불러오기
 const mtlLoader = new MTLLoader();
-mtlLoader.load('/models/factory.mtl', function(materials) {
+mtlLoader.load('/models/one-room4.mtl', function(materials) {
   materials.preload();
   const objLoader = new OBJLoader();
   objLoader.setMaterials(materials);
-objLoader.load('/models/factory.obj', function(object) {
+objLoader.load('/models/one-room4.obj', function(object) {
     object.traverse(function(child) {
         if (child.isMesh) {
             child.castShadow = true;
