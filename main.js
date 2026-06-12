@@ -17,44 +17,41 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.appendChild(renderer.domElement);
 
 // 조명
-// 전체 밝기
 const ambientLight = new THREE.AmbientLight(0xffffff, 3);
 scene.add(ambientLight);
 
-// 위에서 아래로
 const dirLight1 = new THREE.DirectionalLight(0xffffff, 3);
 dirLight1.position.set(0, 1000, 0);
 scene.add(dirLight1);
 
-// 앞에서
 const dirLight2 = new THREE.DirectionalLight(0xffffff, 2);
 dirLight2.position.set(0, 500, 1000);
 scene.add(dirLight2);
 
-// 옆에서
 const dirLight3 = new THREE.DirectionalLight(0xffffff, 2);
 dirLight3.position.set(1000, 500, 0);
 scene.add(dirLight3);
+
 // GLB 로드
 const loader = new GLTFLoader();
 loader.load('/models/factory.glb', (gltf) => {
     const object = gltf.scene;
     object.rotation.x = Math.PI / 2;
-object.traverse((child) => {
-    if (child.isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-        child.material = new THREE.MeshStandardMaterial({
-            color: 0xffffff,
-            roughness: 0.5,
-            metalness: 0.1,
-            side: THREE.DoubleSide
-        });
-    }
-});
+    object.traverse((child) => {
+        if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            child.material = new THREE.MeshStandardMaterial({
+                color: 0xffffff,
+                roughness: 0.5,
+                metalness: 0.1,
+                side: THREE.DoubleSide
+            });
+        }
+    });
     scene.add(object);
 
-    // 모델 중심으로 카메라 시작 위치 설정
+    // 카메라 시작 위치
     const box = new THREE.Box3().setFromObject(object);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
