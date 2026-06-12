@@ -1,187 +1,120 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
-import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
 
-// RectAreaLight 초기화
-RectAreaLightUniformsLib.init();
-
-// 장면 설정
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xf0f0f0);
+scene.background = new THREE.Color(0x88ccee);
 
-// 카메라 설정 (Isometric)
-const aspect = window.innerWidth / window.innerHeight;
-const viewSize = 500;
-const camera = new THREE.OrthographicCamera(
-  -viewSize * aspect, viewSize * aspect,
-  viewSize, -viewSize,
-  0.1, 100000
-);
-camera.position.set(500, 500, 500);
-camera.lookAt(0, 0, 0);
+// FPS 카메라
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100000);
+camera.rotation.order = 'YXZ';
+camera.position.set(0, 100, 0);
 
-// 렌더러 설정
 const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.appendChild(renderer.domElement);
 
-// 마우스로 돌리기 설정
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-
-// 1_light : 외부 하늘 고정 조명
-const sunLight = new THREE.DirectionalLight(0xffffff, 3);
-sunLight.position.set(500, 1000, 500);
-scene.add(sunLight);
-
-// 2_light : 실내 천장 조명
-const rectLight = new THREE.RectAreaLight(0xffffff, 5, 1000, 1000);
-rectLight.position.set(0, 900, 0);
-rectLight.lookAt(0, 0, 0);
-rectLight.visible = false;
-scene.add(rectLight);
-
-// 보조 조명
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+// 조명
+// 전체 밝기
+const ambientLight = new THREE.AmbientLight(0xffffff, 3);
 scene.add(ambientLight);
 
-// GLB 로더
-const gltfLoader = new GLTFLoader();
-gltfLoader.load('/models/factory.glb', function(gltf) {
+// 위에서 아래로
+const dirLight1 = new THREE.DirectionalLight(0xffffff, 3);
+dirLight1.position.set(0, 1000, 0);
+scene.add(dirLight1);
+
+// 앞에서
+const dirLight2 = new THREE.DirectionalLight(0xffffff, 2);
+dirLight2.position.set(0, 500, 1000);
+scene.add(dirLight2);
+
+// 옆에서
+const dirLight3 = new THREE.DirectionalLight(0xffffff, 2);
+dirLight3.position.set(1000, 500, 0);
+scene.add(dirLight3);
+// GLB 로드
+const loader = new GLTFLoader();
+loader.load('/models/factory.glb', (gltf) => {
     const object = gltf.scene;
-    object.traverse(function(child) {
-        if (child.isMesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
-        }
-    });
+    object.rotation.x = Math.PI / 2;
+object.traverse((child) => {
+    if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        child.material = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            roughness: 0.5,
+            metalness: 0.1,
+            side: THREE.DoubleSide
+        });
+    }
+});sa
+    scene.add(object);
+
+    // 모델 중심으로 카메라 시작 위치 설정
     const box = new THREE.Box3().setFromObject(object);
     const center = box.getCenter(new THREE.Vector3());
-    object.position.sub(center);
-    scene.add(object);
+    const size = box.getSize(new THREE.Vector3());
+    camera.position.set(center.x, center.y + size.y * 0.1, center.z);
+    console.log('모델 로드 완료!');
 });
 
-// OBJ 로더
-const mtlLoader = new MTLLoader();
-const objLoader = new OBJLoader();
+// 키보드
+const keyStates = {};
+document.addEventListener('keydown', (e) => { keyStates[e.code] = true; });
+document.addEventListener('keyup', (e) => { keyStates[e.code] = false; });
 
-// one-room3 로드
-// mtlLoader.load('/models/one-room3.mtl', function(materials) {
-//     materials.preload();
-//     objLoader.setMaterials(materials);
-//     objLoader.load('/models/one-room3.obj', function(object) {
-//         object.traverse(function(child) {
-//             if (child.isMesh) {
-//                 child.castShadow = true;
-//                 child.receiveShadow = true;
-//                 child.material.side = THREE.DoubleSide;
-//             }
-//         });
-//         const box = new THREE.Box3().setFromObject(object);
-//         const center = box.getCenter(new THREE.Vector3());
-//         object.position.sub(center);
-//         scene.add(object);
-//     });
-// });
-
-// one-room4 로드
-// mtlLoader.load('/models/one-room4.mtl', function(materials) {
-//     materials.preload();
-//     objLoader.setMaterials(materials);
-//     objLoader.load('/models/one-room4.obj', function(object) {
-//         object.traverse(function(child) {
-//             if (child.isMesh) {
-//                 child.castShadow = true;
-//                 child.receiveShadow = true;
-//                 child.material.side = THREE.DoubleSide;
-//             }
-//         });
-//         const box = new THREE.Box3().setFromObject(object);
-//         const center = box.getCenter(new THREE.Vector3());
-//         object.position.sub(center);
-//         scene.add(object);
-//     });
-// });
-
-// 조명 버튼 제어
-const btnSun = document.getElementById('btn-sun');
-const btnIndoor = document.getElementById('btn-indoor');
-
-btnSun.addEventListener('click', () => {
-    sunLight.visible = !sunLight.visible;
-    btnSun.textContent = sunLight.visible ? '☀️ 외부 조명 ON' : '☀️ 외부 조명 OFF';
-    btnSun.classList.toggle('active', sunLight.visible);
+// 마우스 클릭시 포인터 잠금
+document.body.addEventListener('click', () => {
+    document.body.requestPointerLock();
 });
 
-btnIndoor.addEventListener('click', () => {
-    rectLight.visible = !rectLight.visible;
-    btnIndoor.textContent = rectLight.visible ? '💡 실내 조명 ON' : '💡 실내 조명 OFF';
-    btnIndoor.classList.toggle('active', rectLight.visible);
+document.body.addEventListener('mousemove', (e) => {
+    if (document.pointerLockElement === document.body) {
+        camera.rotation.y -= e.movementX / 500;
+        camera.rotation.x -= e.movementY / 500;
+        camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+    }
 });
 
-// 밝기 슬라이더 제어
-const sliderSun = document.getElementById('slider-sun');
-const sliderIndoor = document.getElementById('slider-indoor');
-const sunValue = document.getElementById('sun-value');
-const indoorValue = document.getElementById('indoor-value');
-
-sliderSun.addEventListener('input', () => {
-    sunLight.intensity = parseFloat(sliderSun.value);
-    sunValue.textContent = sliderSun.value;
-});
-
-sliderIndoor.addEventListener('input', () => {
-    rectLight.intensity = parseFloat(sliderIndoor.value);
-    indoorValue.textContent = sliderIndoor.value;
-});
-
-// View Cube 제어
-const views = {
-    iso:     { pos: [500, 500, 500],   up: [0,1,0] },
-    top:     { pos: [0, 1000, 0],      up: [0,0,-1] },
-    front:   { pos: [0, 0, 1000],      up: [0,1,0] },
-    back:    { pos: [0, 0, -1000],     up: [0,1,0] },
-    right:   { pos: [1000, 0, 0],      up: [0,1,0] },
-    left:    { pos: [-1000, 0, 0],     up: [0,1,0] },
-    bottom:  { pos: [0, -1000, 0],     up: [0,0,1] },
-    'x-pos': { pos: [1000, 0, 0],      up: [0,1,0] },
-    'x-neg': { pos: [-1000, 0, 0],     up: [0,1,0] },
-    'y-pos': { pos: [0, 1000, 0],      up: [0,0,-1] },
-    'y-neg': { pos: [0, -1000, 0],     up: [0,0,1] },
-    'z-pos': { pos: [0, 0, 1000],      up: [0,1,0] },
-    'z-neg': { pos: [0, 0, -1000],     up: [0,1,0] },
-};
-
-document.querySelectorAll('.cube-face').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const view = views[btn.dataset.view];
-        camera.position.set(...view.pos);
-        camera.up.set(...view.up);
-        camera.lookAt(0, 0, 0);
-        controls.target.set(0, 0, 0);
-        controls.update();
-        document.querySelectorAll('.cube-face').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-    });
-});
-
-// 화면 크기 변경 대응
 window.addEventListener('resize', () => {
-    const aspect = window.innerWidth / window.innerHeight;
-    camera.left = -viewSize * aspect;
-    camera.right = viewSize * aspect;
+    camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// 애니메이션 루프
+// 이동
+const moveSpeed = 50;
+const direction = new THREE.Vector3();
+const front = new THREE.Vector3();
+const right = new THREE.Vector3();
+
 function animate() {
     requestAnimationFrame(animate);
-    controls.update();
+
+    if (document.pointerLockElement === document.body) {
+        camera.getWorldDirection(front);
+        front.y = 0;
+        front.normalize();
+
+        right.crossVectors(front, new THREE.Vector3(0, 1, 0)).normalize();
+
+        direction.set(0, 0, 0);
+
+        if (keyStates['KeyW']) direction.add(front);
+        if (keyStates['KeyS']) direction.sub(front);
+        if (keyStates['KeyA']) direction.sub(right);
+        if (keyStates['KeyD']) direction.add(right);
+        if (keyStates['KeyE']) direction.y += 1;
+        if (keyStates['KeyQ']) direction.y -= 1;
+
+        direction.normalize().multiplyScalar(moveSpeed * 0.1);
+        camera.position.add(direction);
+    }
+
     renderer.render(scene, camera);
 }
 animate();
