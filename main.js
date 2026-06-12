@@ -51,7 +51,7 @@ object.traverse((child) => {
             side: THREE.DoubleSide
         });
     }
-});sa
+});
     scene.add(object);
 
     // 모델 중심으로 카메라 시작 위치 설정
