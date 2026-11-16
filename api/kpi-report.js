@@ -8,7 +8,7 @@
 // - KPI_REPORT_TO    (필수) 받는 사람. 쉼표로 여러 명
 // - KPI_REPORT_FROM  (선택) 보내는 사람. 기본 'TP_2-3 KPI <onboarding@resend.dev>'
 //                    (onboarding@resend.dev 는 Resend 가입 메일 주소로만 발송 가능)
-// - CRON_SECRET      (권장) 설정하면 Vercel Cron 외의 호출을 막음
+// - CRON_SECRET      (선택) 설정하면 Vercel Cron 외의 호출을 막음. 없어도 실제 발송은 오늘 날짜만·하루 1통
 //
 // 수동 확인: GET /api/kpi-report?dry=1[&date=YYYY-MM-DD] → 발송하지 않고 내용·예약 시각만 반환.
 
@@ -78,6 +78,11 @@ export default async function handler(req, res) {
     const query = req.query || {};
     const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(query.date || '')) ? String(query.date) : kstParts(new Date()).dateKey;
     const dry = query.dry === '1';
+    // 실제 발송은 오늘(KST)만 — 같은 날 중복 방지 키와 함께 하루 최대 1통으로 제한
+    if (!dry && query.date) {
+        res.status(400).json({ error: 'date_not_allowed', message: '날짜 지정은 dry=1 에서만 가능합니다.' });
+        return;
+    }
 
     if (!isKpiWorkday(dateKey)) {
         res.status(200).json({ date: dateKey, skipped: 'not_a_workday' });
