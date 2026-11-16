@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { SET_KPI, kpiCurrentAfter, kpiImprovement, kpiTotal } from './kpi.js';
 
 // =====================================================================
 // 2×2 멀티뷰 — 화면을 4개 구역으로 나누고 각 구역이 설비 1대(모델)를 비춤.
@@ -27,26 +28,6 @@ const SET_NAMES = {
     D: '비스트럭처',
 };
 
-// 업체별 핵심성과지표(KPI) — 구축 전·목표·구축 후 기준값. 화면의 구축 후 값은 kpiCurrentAfter에서 시각별로 정함.
-// 망소특성 개선율 = (구축 전 − 구축 후) / 구축 전 × 100, 종합 = 지표별 개선율 × 가중치 합
-const SET_KPI = {
-    A: { product: '원목 테이블', items: [
-        { code: 'P', name: '제조 리드타임', unit: '일', before: 10, target: 5, after: 4.5, weight: 0.5 },
-        { code: 'C', name: '공정 작업공수', unit: 'MD', before: 3, target: 1.5, after: 1.25, weight: 0.5 },
-    ] },
-    B: { product: '원목 사방탁자', items: [
-        { code: 'P', name: '제조 리드타임', unit: '일', before: 15, target: 7.5, after: 7, weight: 0.5 },
-        { code: 'C', name: '공정 작업공수', unit: 'MD', before: 4, target: 2, after: 1.75, weight: 0.5 },
-    ] },
-    C: { product: '원목 의자', items: [
-        { code: 'P', name: '제조 리드타임', unit: '일', before: 12, target: 6, after: 5.5, weight: 0.5 },
-        { code: 'C', name: '공정 작업공수', unit: 'MD', before: 4, target: 2, after: 1.75, weight: 0.5 },
-    ] },
-    D: { product: '원목 서랍장', items: [
-        { code: 'P', name: '제조 리드타임', unit: '일', before: 20, target: 10, after: 9, weight: 0.5 },
-        { code: 'C', name: '공정 작업공수', unit: 'MD', before: 5, target: 2.5, after: 2.25, weight: 0.5 },
-    ] },
-};
 const VIEW_FIT_MARGIN = 1.3; // 모델이 화면에 꽉 차지 않도록 여유 배율
 const OVERVIEW_FIT_MARGIN = 1.7; // 전체 화면 — 네 모서리의 토글·표·카드에 끝 설비가 가리지 않게 여유를 더 둠
 const VIEW_DEFAULT_HEIGHT = 6000; // 모델 로드 전 임시 화면 세로 범위(mm)
@@ -261,98 +242,9 @@ if (viewGridEl) viewGridEl.after(overviewFrame);
 // ---------------------------------------------------------------------
 // 핵심성과지표(KPI) 카드 — 2×2: 화면마다 해당 업체, 전체 화면: 4개사 비교표. 단축키 K.
 // ---------------------------------------------------------------------
-// "구축 후" 값 진행 — 평일(공휴일 제외) 근무시간(10:00~18:00)에만 바뀜.
-// 10:00에 목표값에서 시작해 60~90분 간격(불규칙)·불규칙한 폭으로 움직여 18:00 전에 SET_KPI 구축 후 값에 도달.
-// 근무시간 외(18:00 이후·10:00 이전·주말·공휴일)에는 마지막 도달값(SET_KPI 구축 후 값)을 유지.
-// 같은 날짜·업체·지표는 같은 시각과 경로(시각 기준으로 누가 열어도 같은 값).
-const KPI_WORK_START_MIN = 10 * 60;
-const KPI_WORK_END_MIN = 18 * 60;
-const KPI_STEP_GAP_MIN = [60, 90];
-const KPI_VALUE_STEP = 0.05;
+// 화면 갱신 확인 주기 — 값이 바뀔 때만 다시 그림
 const KPI_REFRESH_MS = 30 * 1000;
-// 공휴일(대체·선거일 포함) — 한국천문연구원 월력요항 기준. 해가 바뀌기 전에 다음 해 목록 추가.
-const KR_HOLIDAYS = new Set([
-    '2026-01-01', '2026-02-16', '2026-02-17', '2026-02-18', '2026-03-01', '2026-03-02',
-    '2026-05-05', '2026-05-24', '2026-05-25', '2026-06-03', '2026-06-06', '2026-07-17',
-    '2026-08-15', '2026-08-17', '2026-09-24', '2026-09-25', '2026-09-26', '2026-10-03',
-    '2026-10-05', '2026-10-09', '2026-12-25',
-    '2027-01-01', '2027-02-06', '2027-02-07', '2027-02-08', '2027-02-09', '2027-03-01',
-    '2027-05-01', '2027-05-03', '2027-05-05', '2027-05-13', '2027-06-06', '2027-07-17',
-    '2027-07-19', '2027-08-15', '2027-08-16', '2027-09-14', '2027-09-15', '2027-09-16',
-    '2027-10-03', '2027-10-04', '2027-10-09', '2027-10-11', '2027-12-25', '2027-12-27',
-]);
 
-function kpiDateKey(d) {
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-function seededRandom(str) {
-    let h = 2166136261;
-    for (let i = 0; i < str.length; i++) {
-        h ^= str.charCodeAt(i);
-        h = Math.imul(h, 16777619);
-    }
-    let a = h >>> 0;
-    return () => {
-        a = (a + 0x6d2b79f5) | 0;
-        let t = Math.imul(a ^ (a >>> 15), a | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-}
-
-const roundKpi = (v) => Number((Math.round(v / KPI_VALUE_STEP) * KPI_VALUE_STEP).toFixed(2));
-
-// 하루 진행 일정: [{ min: 분(자정 기준), value }] — 10:00 목표값, 마지막 단계 = 구축 후 값.
-// 바뀌는 시각은 업체 단위로 같고(P·C 동시), 폭은 지표마다 다름. 단계마다 표시값이 실제로 바뀌게 보정.
-function kpiDaySchedule(set, item, dateKey) {
-    const timeRand = seededRandom(`${dateKey}|${set}`);
-    const times = [];
-    for (let t = KPI_WORK_START_MIN; ;) {
-        t += Math.round(KPI_STEP_GAP_MIN[0] + (KPI_STEP_GAP_MIN[1] - KPI_STEP_GAP_MIN[0]) * timeRand());
-        if (t > KPI_WORK_END_MIN) break;
-        times.push(t);
-    }
-    const rand = seededRandom(`${dateKey}|${set}|${item.code}`);
-    const between = (lo, hi) => lo + (hi - lo) * rand();
-    let sum = 0;
-    const cumulative = times.map((_, i) => {
-        sum += i < times.length - 1 && i > 0 && rand() < 0.25 ? -between(0.05, 0.2) : between(0.3, 1);
-        return sum;
-    });
-    const total = cumulative[cumulative.length - 1];
-    const span = item.target - item.after;
-    const values = [item.target];
-    times.forEach((_, i) => {
-        if (i === times.length - 1) {
-            values.push(item.after);
-            return;
-        }
-        const prev = values[values.length - 1];
-        const want = roundKpi(item.target - span * Math.min(1, Math.max(0, cumulative[i] / total)));
-        const s = KPI_VALUE_STEP;
-        const candidates = [want, prev - s, prev + s, prev - 2 * s, prev + 2 * s].map(roundKpi);
-        const ok = (v) => v >= item.after && v <= item.target && v !== prev && (i !== times.length - 2 || v !== item.after);
-        values.push(candidates.find(ok) ?? want);
-    });
-    return [KPI_WORK_START_MIN, ...times].map((min, i) => ({ min, value: values[i] }));
-}
-
-function kpiCurrentAfter(set, item, now) {
-    const day = now.getDay();
-    const min = now.getHours() * 60 + now.getMinutes();
-    if (day === 0 || day === 6 || min < KPI_WORK_START_MIN || KR_HOLIDAYS.has(kpiDateKey(now))) return item.after;
-    let value = item.after;
-    for (const step of kpiDaySchedule(set, item, kpiDateKey(now))) {
-        if (step.min <= min) value = step.value;
-    }
-    return value;
-}
-
-const kpiImprovement = (item, after) => ((item.before - after) / item.before) * 100;
-const kpiTotal = (set, now) => SET_KPI[set].items.reduce(
-    (sum, item) => sum + kpiImprovement(item, kpiCurrentAfter(set, item, now)) * item.weight, 0);
 const fmtPct = (v) => `${v.toFixed(2)}%`;
 const fmtKpiNum = (v) => String(Number(v.toFixed(2)));
 
