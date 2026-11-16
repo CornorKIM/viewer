@@ -1,117 +1,1020 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x88ccee);
+// =====================================================================
+// 2×2 멀티뷰 — 화면을 4개 구역으로 나누고 각 구역이 설비 1대(모델)를 비춤.
+//   1번 화면(좌상) ↔ 설비 A(목공소 봄)    2번 화면(우상) ↔ 설비 B(이레공방)
+//   3번 화면(좌하) ↔ 설비 C(브랜드스미스) 4번 화면(우하) ↔ 설비 D(비스트럭처)
+// 좌표계: X 좌우 / Y 상하 / Z 높이(Z-up), 단위 mm. 카메라는 화면별 Orthographic(등각).
+// =====================================================================
 
-// FPS 카메라
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100000);
-camera.rotation.order = 'YXZ';
-camera.position.set(0, 100, 0);
+const MOVE_SPEED = 3000; // 이동 속도 (초당 거리, mm)
+const ZOOM_SPEED = 1.5; // 초당 배율 변화량 (Z/X)
+const WHEEL_ZOOM_STEP = 0.1; // 마우스휠 한 틱당 확대·축소 비율 (10%)
+const MIN_VIEW_HEIGHT = 50; // 최대 확대 한계(mm)
+
+const SENSOR_POLL_INTERVAL = 1000;
+const MACHINE_POLL_INTERVAL = 1000;
+const CLICK_MARKER_RADIUS = 40;
+
+const GIZMO_SIZE_PX = 90;
+const GIZMO_MARGIN_PX = 10;
+
+// 화면 번호(1~4) → 모델(설비 세트). 순서 변경 시 이 배열만 수정.
+const VIEW_SETS = ['A', 'B', 'C', 'D'];
+
+// 설비 코드(A~D) → 화면 표시명. 코드(A~D)는 유지하고 표시명만 변경.
+const SET_NAMES = {
+    A: '목공소 봄',
+    B: '이레공방',
+    C: '브랜드스미스',
+    D: '비스트럭처',
+};
+const VIEW_FIT_MARGIN = 1.3; // 모델이 화면에 꽉 차지 않도록 여유 배율
+const VIEW_DEFAULT_HEIGHT = 6000; // 모델 로드 전 임시 화면 세로 범위(mm)
+
+// 축 이동 범위(기준 위치 대비 오프셋, mm) — DB 좌표 범위 제한과 화면 맞춤(fit)에 공통 사용
+// 교체 모델(BODY/XBODY/YBODY/ZBODY) 치수 기준: X = BODY 폭 안, Y = BODY 길이 안. Z = -100 ~ 200 (지정값)
+const AXIS_MOVE_RANGE = {
+    x: [-600, 600],
+    y: [-1100, 1450],
+    z: [-100, 200],
+};
+
+// 세트별 고정 라벨 위치 — 모델 로드 전 각 화면의 임시 중심점으로도 사용
+const AXIS_STATUS_LABEL_POS = {
+    A: [1233, 833, 0],
+    B: [5446, 1376, 10],
+    C: [9501, 1201, 10],
+    D: [13316, 1089, 10],
+};
+
+// 등각투상 시작 각도
+const ORBIT_RADIUS = 3000 * Math.sqrt(3);
+const ORBIT_ELEVATION_MIN = 0.05;
+const ORBIT_ELEVATION_MAX = Math.PI / 2 - 0.05;
+const ORBIT_AZIMUTH_START = -Math.PI / 4;
+const ORBIT_ELEVATION_START = Math.asin(1 / Math.sqrt(3)); // 약 35.26도
+const ROTATE_SPEED = Math.PI / 2; // 라디안/초 (90도/초)
+
+// ---------------------------------------------------------------------
+// 기본 셋업
+// ---------------------------------------------------------------------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2e3236);
+scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
+keyLight.position.set(1, -1, 2);
+scene.add(keyLight);
+const fillLight = new THREE.DirectionalLight(0xffffff, 1);
+fillLight.position.set(-1, 1, 1);
+scene.add(fillLight);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.appendChild(renderer.domElement);
 
-// 조명
-const ambientLight = new THREE.AmbientLight(0xffffff, 3);
-scene.add(ambientLight);
+scene.add(new THREE.AxesHelper(100));
 
-const dirLight1 = new THREE.DirectionalLight(0xffffff, 3);
-dirLight1.position.set(0, 1000, 0);
-scene.add(dirLight1);
+// ---------------------------------------------------------------------
+// 화면(뷰) 4개 — 각자 카메라·중심점·각도·배율을 독립적으로 가짐
+// ---------------------------------------------------------------------
+function createViewCamera() {
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -100000, 100000);
+    camera.up.set(0, 0, 1);
+    return camera;
+}
 
-const dirLight2 = new THREE.DirectionalLight(0xffffff, 2);
-dirLight2.position.set(0, 500, 1000);
-scene.add(dirLight2);
-
-const dirLight3 = new THREE.DirectionalLight(0xffffff, 2);
-dirLight3.position.set(1000, 500, 0);
-scene.add(dirLight3);
-
-// GLB 로드
-const loader = new GLTFLoader();
-loader.load('/models/factory.glb', (gltf) => {
-    const object = gltf.scene;
-    object.rotation.x = Math.PI / 2;
-    object.traverse((child) => {
-        if (child.isMesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
-            child.material = new THREE.MeshStandardMaterial({
-                color: 0xffffff,
-                roughness: 0.5,
-                metalness: 0.1,
-                side: THREE.DoubleSide
-            });
-        }
-    });
-    scene.add(object);
-
-    // 카메라 시작 위치
-    const box = new THREE.Box3().setFromObject(object);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    camera.position.set(center.x, center.y + size.y * 0.1, center.z);
-    console.log('모델 로드 완료!');
+const views = VIEW_SETS.map((set, index) => {
+    const [fx, fy, fz] = AXIS_STATUS_LABEL_POS[set];
+    return {
+        no: index + 1,
+        set,
+        camera: createViewCamera(),
+        target: new THREE.Vector3(fx, fy, fz),
+        azimuth: ORBIT_AZIMUTH_START,
+        elevation: ORBIT_ELEVATION_START,
+        viewHeight: VIEW_DEFAULT_HEIGHT,
+    };
 });
 
-// 키보드
+// 전체 화면 — 설비 A~D 전체를 한 화면에 표시. '전체 화면' 토글(단축키 F) ON 시 2×2 대신 사용.
+const OVERVIEW_NAME = '전체';
+const OVERVIEW_DEFAULT_HEIGHT = 14000; // 모델 로드 전 임시 화면 세로 범위(mm)
+const overviewView = (() => {
+    const pos = Object.values(AXIS_STATUS_LABEL_POS);
+    const cx = pos.reduce((sum, p) => sum + p[0], 0) / pos.length;
+    const cy = pos.reduce((sum, p) => sum + p[1], 0) / pos.length;
+    return {
+        no: 0,
+        set: null,
+        isOverview: true,
+        camera: createViewCamera(),
+        target: new THREE.Vector3(cx, cy, 0),
+        azimuth: ORBIT_AZIMUTH_START,
+        elevation: ORBIT_ELEVATION_START,
+        viewHeight: OVERVIEW_DEFAULT_HEIGHT,
+    };
+})();
+const allViews = [...views, overviewView];
+
+let overviewMode = false; // true = 전체 화면 1개, false = 2×2 분할
+let activeView = views[0]; // 키보드 조작 대상 — 화면 클릭 시 변경
+let gridActiveView = views[0]; // 2×2 모드에서 마지막으로 선택한 화면 (전체 화면 해제 시 복귀용)
+
+function viewName(view) {
+    return view.isOverview ? OVERVIEW_NAME : SET_NAMES[view.set];
+}
+
+function visibleViews() {
+    return overviewMode ? [overviewView] : views;
+}
+
+// 화면 영역(CSS px, 좌상단 원점)
+function getViewRect(view) {
+    if (view.isOverview) {
+        return { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
+    }
+    const w = window.innerWidth / 2;
+    const h = window.innerHeight / 2;
+    const col = (view.no - 1) % 2;
+    const row = Math.floor((view.no - 1) / 2);
+    return { x: col * w, y: row * h, w, h };
+}
+
+function viewAtPoint(clientX, clientY) {
+    if (overviewMode) return overviewView;
+    const col = clientX < window.innerWidth / 2 ? 0 : 1;
+    const row = clientY < window.innerHeight / 2 ? 0 : 1;
+    return views[row * 2 + col];
+}
+
+function updateViewCamera(view) {
+    const { w, h } = getViewRect(view);
+    const aspect = w / h;
+    const halfH = view.viewHeight / 2;
+    const halfW = halfH * aspect;
+    const cam = view.camera;
+    cam.left = -halfW;
+    cam.right = halfW;
+    cam.top = halfH;
+    cam.bottom = -halfH;
+    cam.updateProjectionMatrix();
+
+    const horizontal = ORBIT_RADIUS * Math.cos(view.elevation);
+    cam.position.set(
+        view.target.x + horizontal * Math.cos(view.azimuth),
+        view.target.y + horizontal * Math.sin(view.azimuth),
+        view.target.z + ORBIT_RADIUS * Math.sin(view.elevation)
+    );
+    cam.lookAt(view.target);
+    cam.updateMatrixWorld();
+}
+
+// 모델 박스(이동 범위 포함)가 화면에 들어오도록 중심점·배율 자동 설정
+function fitViewToBox(view, box) {
+    view.target.copy(box.getCenter(new THREE.Vector3()));
+    updateViewCamera(view);
+
+    const inv = view.camera.matrixWorldInverse;
+    let maxX = 0;
+    let maxY = 0;
+    const p = new THREE.Vector3();
+    for (let i = 0; i < 8; i++) {
+        p.set(
+            i & 1 ? box.max.x : box.min.x,
+            i & 2 ? box.max.y : box.min.y,
+            i & 4 ? box.max.z : box.min.z
+        ).applyMatrix4(inv);
+        maxX = Math.max(maxX, Math.abs(p.x));
+        maxY = Math.max(maxY, Math.abs(p.y));
+    }
+    const { w, h } = getViewRect(view);
+    const aspect = w / h;
+    view.viewHeight = Math.max(MIN_VIEW_HEIGHT, Math.max(2 * maxY, (2 * maxX) / aspect) * VIEW_FIT_MARGIN);
+    updateViewCamera(view);
+}
+
+allViews.forEach(updateViewCamera);
+
+// ---------------------------------------------------------------------
+// 화면 구분선·제목 (HTML 오버레이)
+// ---------------------------------------------------------------------
+const viewGridEl = document.getElementById('viewGrid');
+const viewFrames = views.map((view) => {
+    const frame = document.createElement('div');
+    frame.className = 'view-frame';
+    const title = document.createElement('div');
+    title.className = 'view-title';
+    title.textContent = SET_NAMES[view.set];
+    frame.appendChild(title);
+    if (viewGridEl) viewGridEl.appendChild(frame);
+    return frame;
+});
+
+// 전체 화면용 제목 (전체 화면 모드에서만 표시)
+const overviewFrame = document.createElement('div');
+overviewFrame.id = 'overviewFrame';
+overviewFrame.className = 'view-frame hidden';
+const overviewTitle = document.createElement('div');
+overviewTitle.className = 'view-title';
+overviewTitle.textContent = OVERVIEW_NAME;
+overviewFrame.appendChild(overviewTitle);
+if (viewGridEl) viewGridEl.after(overviewFrame);
+
+function updateActiveFrame() {
+    viewFrames.forEach((frame, i) => frame.classList.toggle('active', views[i] === activeView));
+}
+updateActiveFrame();
+
+// 전체 화면 ↔ 2×2 분할 전환
+function setOverviewMode(on) {
+    overviewMode = on;
+    if (viewGridEl) viewGridEl.classList.toggle('hidden', on);
+    overviewFrame.classList.toggle('hidden', !on);
+    activeView = on ? overviewView : gridActiveView;
+    updateActiveFrame();
+}
+
+// ---------------------------------------------------------------------
+// 표시 on/off 토글 — 우측 좌표 팝업(#coords), 우측 신호값 팝업(#sensor, #machine), 하단 조작법(#info)
+// 상태는 브라우저에 저장되어 새로고침 후에도 유지. 단축키 C(좌표), V(신호값), H(조작법).
+// ---------------------------------------------------------------------
+const DISPLAY_TOGGLES = [
+    { key: 'overview', buttonId: 'toggleOverview', targetIds: [], label: '전체 화면', hotkey: 'KeyF', defaultOn: false, onChange: setOverviewMode },
+    { key: 'coords', buttonId: 'toggleCoords', targetIds: ['coords'], label: '좌표', hotkey: 'KeyC' },
+    { key: 'signals', buttonId: 'toggleSignals', targetIds: ['sensor', 'machine'], label: '신호값', hotkey: 'KeyV' },
+    { key: 'help', buttonId: 'toggleHelp', targetIds: ['info'], label: '조작법', hotkey: 'KeyH' },
+];
+const TOGGLE_STORAGE_PREFIX = 'viewer.toggle.';
+
+function readToggleState(key, defaultOn = true) {
+    try {
+        const saved = localStorage.getItem(TOGGLE_STORAGE_PREFIX + key);
+        if (saved === null) return defaultOn;
+        return saved !== 'off';
+    } catch {
+        return defaultOn; // 저장소 사용 불가 시 기본값
+    }
+}
+
+function writeToggleState(key, visible) {
+    try {
+        localStorage.setItem(TOGGLE_STORAGE_PREFIX + key, visible ? 'on' : 'off');
+    } catch {
+        // 저장 실패는 무시 (표시 전환은 정상 동작)
+    }
+}
+
+function applyToggle(t, visible) {
+    t.visible = visible;
+    t.targetIds.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('hidden', !visible);
+    });
+    const btn = document.getElementById(t.buttonId);
+    if (btn) {
+        btn.classList.toggle('on', visible); // 스위치 색·손잡이 위치는 CSS(.on)로 표시
+        btn.setAttribute('aria-checked', String(visible));
+    }
+    if (t.onChange) t.onChange(visible);
+}
+
+DISPLAY_TOGGLES.forEach((t) => {
+    applyToggle(t, readToggleState(t.key, t.defaultOn !== false));
+    const btn = document.getElementById(t.buttonId);
+    if (btn) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            applyToggle(t, !t.visible);
+            writeToggleState(t.key, t.visible);
+            btn.blur(); // 버튼 포커스가 키보드 조작(WASD 등)을 가로채지 않게
+        });
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    const t = DISPLAY_TOGGLES.find((d) => d.hotkey === e.code);
+    if (!t) return;
+    applyToggle(t, !t.visible);
+    writeToggleState(t.key, t.visible);
+});
+
+// ---------------------------------------------------------------------
+// 화면별 WCS 방향 기즈모 (각 화면 좌하단)
+// ---------------------------------------------------------------------
+const gizmoScene = new THREE.Scene();
+const gizmoCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 10);
+gizmoScene.add(new THREE.AxesHelper(1));
+
+function makeAxisLabelSprite(text, color) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = color;
+    ctx.font = 'bold 44px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 32, 34);
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(0.45, 0.45, 1);
+    return sprite;
+}
+
+const gizmoLabelX = makeAxisLabelSprite('X', '#ff5555');
+gizmoLabelX.position.set(1.3, 0, 0);
+gizmoScene.add(gizmoLabelX);
+const gizmoLabelY = makeAxisLabelSprite('Y', '#55ff55');
+gizmoLabelY.position.set(0, 1.3, 0);
+gizmoScene.add(gizmoLabelY);
+const gizmoLabelZ = makeAxisLabelSprite('Z', '#5599ff');
+gizmoLabelZ.position.set(0, 0, 1.3);
+gizmoScene.add(gizmoLabelZ);
+
+// 렌더러 viewport/scissor는 CSS px 단위, 원점은 좌하단
+function renderAxisGizmo(view, glX, glY) {
+    gizmoCamera.position.set(0, 0, 3).applyQuaternion(view.camera.quaternion);
+    gizmoCamera.quaternion.copy(view.camera.quaternion);
+
+    const x = glX + GIZMO_MARGIN_PX;
+    const y = glY + GIZMO_MARGIN_PX;
+    renderer.setViewport(x, y, GIZMO_SIZE_PX, GIZMO_SIZE_PX);
+    renderer.setScissor(x, y, GIZMO_SIZE_PX, GIZMO_SIZE_PX);
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(gizmoScene, gizmoCamera);
+    renderer.autoClear = true;
+}
+
+// 오른쪽 위 좌표 HUD
+const coordsEl = document.getElementById('coords');
+
+// ---------------------------------------------------------------------
+// InfluxDB 센서 값 (RSSI) — /api/sensor (Vercel 서버리스 함수)를 통해서만 조회.
+// ---------------------------------------------------------------------
+const sensorEl = document.getElementById('sensor');
+
+function fieldLine(label, entry) {
+    if (!entry || entry.value === undefined || Number.isNaN(entry.value)) {
+        return `${label}: -`;
+    }
+    return `${label}: ${entry.value}`;
+}
+
+async function pollSensor() {
+    if (!sensorEl) return;
+    try {
+        const res = await fetch('/api/sensor', { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok) {
+            sensorEl.textContent = 'RSSI: (데이터 없음)\nch1: -\nch2: -\nch3: -';
+            return;
+        }
+
+        sensorEl.textContent =
+            `${fieldLine('RSSI', data.RSSI)}\n` +
+            `${fieldLine('ch1', data.ch1)}\n` +
+            `${fieldLine('ch2', data.ch2)}\n` +
+            `${fieldLine('ch3', data.ch3)}`;
+    } catch (err) {
+        sensorEl.textContent = 'RSSI: (연결 실패)';
+    }
+}
+
+if (sensorEl) {
+    pollSensor();
+    setInterval(pollSensor, SENSOR_POLL_INTERVAL);
+}
+
+// ---------------------------------------------------------------------
+// 설비 실제 위치 (PostgreSQL, syntec_cnc.raw_data) — /api/machine (Vercel 서버리스
+// 함수)를 통해서만 조회.
+// ---------------------------------------------------------------------
+const machineEl = document.getElementById('machine');
+
+const MACHINE_RAW_FIELDS = [
+    { key: 'core_status', type: 'int' },
+    { key: 'core_mode', type: 'int' },
+    { key: 'core_count', type: 'int' },
+    { key: 'core_program', type: 'string' },
+    { key: 'core_alarm', type: 'string' },
+    { key: 'pos_x', type: 'float' },
+    { key: 'pos_y', type: 'float' },
+    { key: 'pos_z', type: 'float' },
+    { key: 'pos_y_slave', type: 'float' },
+    { key: 'tcp_x', type: 'float' },
+    { key: 'tcp_y', type: 'float' },
+    { key: 'tcp_z', type: 'float' },
+    { key: 'pwr_spindle', type: 'float' },
+    { key: 'load_spindle', type: 'float' },
+    { key: 'speed_spindle', type: 'float' },
+    { key: 'feedrate', type: 'float' },
+    { key: 'tool_id', type: 'int' },
+    { key: 'override_feed', type: 'int' },
+];
+const MACHINE_RAW_LABEL_WIDTH = Math.max(...MACHINE_RAW_FIELDS.map((f) => f.key.length));
+
+function formatMachineValue(v, type) {
+    if (v === null || v === undefined) return '-';
+    if (type === 'string') return String(v);
+    const n = Number(v);
+    if (Number.isNaN(n)) return String(v);
+    return type === 'int' ? String(Math.trunc(n)) : n.toFixed(1);
+}
+
+function formatCollectedAt(ts) {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return String(ts);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function buildMachineDumpText(raw) {
+    const lines = [`수집 시각: ${formatCollectedAt(raw.created_at)}`];
+    // 고정 항목이 하나도 없으면 DB가 내려준 컬럼을 그대로 표시
+    if (!MACHINE_RAW_FIELDS.some((f) => raw[f.key] !== undefined)) {
+        const keys = Object.keys(raw).filter((k) => k !== 'created_at');
+        const width = Math.max(0, ...keys.map((k) => k.length));
+        keys.forEach((k) => lines.push(`${k.padEnd(width, ' ')} : ${formatMachineValue(raw[k], 'float')}`));
+        return lines.join('\n');
+    }
+    for (const f of MACHINE_RAW_FIELDS) {
+        const label = f.key.padEnd(MACHINE_RAW_LABEL_WIDTH, ' ');
+        lines.push(`${label} : ${formatMachineValue(raw[f.key], f.type)}`);
+    }
+    return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------
+// DB 좌표 → 모델 연동 — /api/machine(PostgreSQL syntec_cnc.raw_data)에서 설비별
+// (EQUIPMENT_NO) 최신 1행을 받아 pos_x/pos_y/pos_z 를 각 설비의 X/Y/Z 축 이동값으로 사용.
+// ---------------------------------------------------------------------
+// 설비 코드(A~D) → DB EQUIPMENT_NO
+const SET_EQUIPMENT_NO = {
+    A: '24424', // 목공소 봄
+    B: '42504', // 이레공방
+    C: '02895', // 브랜드스미스
+    D: '75980', // 비스트럭처
+};
+// DB 좌표를 모델에 반영할지 여부. false = 신호 없음으로 간주 → 모든 설비 랜덤 이동
+// (현재 들어오는 값은 테스트용 신호기 값이라 반영하지 않음. 실제 신호 연결 후 true로 변경)
+const DB_LINK_ENABLED = false;
+const DB_POS_FIELDS = { x: 'pos_x', y: 'pos_y', z: 'pos_z' }; // 기계좌표. 공구 끝 기준이면 tcp_x/tcp_y/tcp_z
+const DB_POS_TO_MM = 0.001; // DB 값 → mm 환산 배율 (DB 255999.0 → 255.999mm)
+const DB_POS_OFFSET = { x: 0, y: 0, z: 0 }; // 기계 원점과 모델 기준 위치 차이 보정(mm)
+const DB_SMOOTHING = 8; // 1초 간격 값 사이를 부드럽게 잇는 정도 (클수록 빠르게 따라감)
+
+const dbPos = {}; // set -> { target, current }
+const dbOnline = {}; // set -> true(신호 수신 중) / false(신호 없음 → 랜덤 이동)
+const axisSets = {}; // set -> { xMover, yMover, zMover, lastPos, usingRandom, xPart, yPart, zPart, *Base* }
+const dbRows = {}; // set -> 최신 DB 행 (없으면 null)
+const dbRangeWarned = {};
+
+// DB 값 → 모델 이동값(mm). 모델 이동 범위(AXIS_MOVE_RANGE)를 벗어나면 범위 끝에 고정하고 콘솔 경고.
+function updateDbTarget(set, data) {
+    const t = {};
+    for (const axis of ['x', 'y', 'z']) {
+        const raw = Number(data[DB_POS_FIELDS[axis]]);
+        if (!Number.isFinite(raw)) return false;
+        const mm = raw * DB_POS_TO_MM + DB_POS_OFFSET[axis];
+        const lo = Math.min(...AXIS_MOVE_RANGE[axis]);
+        const hi = Math.max(...AXIS_MOVE_RANGE[axis]);
+        const warnKey = set + axis;
+        if ((mm < lo || mm > hi) && !dbRangeWarned[warnKey]) {
+            dbRangeWarned[warnKey] = true;
+            console.warn(`설비 ${set}(${SET_EQUIPMENT_NO[set]}) ${DB_POS_FIELDS[axis]}=${raw} → ${mm}mm 가 모델 이동 범위(${lo}~${hi}mm)를 벗어나 범위 끝에 고정합니다.`);
+        }
+        t[axis] = Math.min(hi, Math.max(lo, mm));
+    }
+    if (!dbPos[set]) dbPos[set] = { target: t, current: { ...t } };
+    else dbPos[set].target = t;
+    return true;
+}
+
+// 매 프레임 현재값을 목표값 쪽으로 부드럽게 이동. 아직 수신 전이면 null.
+function stepDbPos(set, dt) {
+    const p = dbPos[set];
+    if (!p) return null;
+    const k = 1 - Math.exp(-DB_SMOOTHING * dt);
+    for (const axis of ['x', 'y', 'z']) {
+        p.current[axis] += (p.target[axis] - p.current[axis]) * k;
+    }
+    return p.current;
+}
+
+// 화면 제목에 설비별 수신 상태 표시
+function setDbLinkStatus(set, ok) {
+    const i = views.findIndex((v) => v.set === set);
+    const title = i >= 0 ? viewFrames[i].querySelector('.view-title') : null;
+    if (title) title.textContent = `${SET_NAMES[set]} · ${ok ? 'DB 연동' : 'DB 미수신'}`;
+    dbOnline[set] = ok;
+}
+VIEW_SETS.forEach((set) => setDbLinkStatus(set, false));
+
+// 우측 설비 데이터 팝업 — 선택한 화면의 설비 표시 (전체 화면이면 마지막으로 선택한 설비)
+let machinePanelError = '';
+function renderMachinePanel() {
+    if (!machineEl) return;
+    const set = (activeView.isOverview ? gridActiveView : activeView).set;
+    const header = `설비: ${SET_NAMES[set]} (${SET_EQUIPMENT_NO[set]})`;
+    if (machinePanelError) {
+        machineEl.textContent = `${header}\n${machinePanelError}`;
+        return;
+    }
+    const row = dbRows[set];
+    machineEl.textContent = row ? `${header}\n${buildMachineDumpText(row)}` : `${header}\n(데이터 없음)`;
+}
+
+async function pollMachine() {
+    try {
+        const eq = VIEW_SETS.map((set) => SET_EQUIPMENT_NO[set]).join(',');
+        const res = await fetch(`/api/machine?eq=${encodeURIComponent(eq)}`, { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        machinePanelError = '';
+        for (const set of VIEW_SETS) {
+            const row = data[SET_EQUIPMENT_NO[set]] || null;
+            dbRows[set] = row;
+            setDbLinkStatus(set, DB_LINK_ENABLED && row ? updateDbTarget(set, row) : false);
+        }
+    } catch (err) {
+        machinePanelError = '(연결 실패)';
+        VIEW_SETS.forEach((set) => setDbLinkStatus(set, false));
+    }
+    renderMachinePanel();
+}
+
+// 팝업 표시 여부와 관계없이 계속 조회 (모델 연동에 사용)
+pollMachine();
+setInterval(pollMachine, MACHINE_POLL_INTERVAL);
+
+// ---------------------------------------------------------------------
+// 텍스트 스프라이트
+// ---------------------------------------------------------------------
+function createTextSprite(textColor = '#ffee88', opts = {}) {
+    const canvas = document.createElement('canvas');
+    canvas.width = opts.width || 512;
+    canvas.height = opts.height || 128;
+    const ctx = canvas.getContext('2d');
+    const texture = new THREE.CanvasTexture(canvas);
+    const [sx, sy] = opts.scale || [800, 200];
+
+    let sprite;
+    if (opts.billboard === false) {
+        const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthTest: false });
+        sprite = new THREE.Mesh(new THREE.PlaneGeometry(sx, sy), material);
+    } else {
+        const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+        sprite = new THREE.Sprite(material);
+        sprite.scale.set(sx, sy, 1);
+    }
+    return {
+        sprite, canvas, ctx, texture, textColor, lastText: '',
+        fontSize: opts.fontSize || 36,
+        lineHeight: opts.lineHeight || 40,
+        align: opts.align || 'center',
+    };
+}
+
+function updateTextSprite(label, text) {
+    if (!label || text === label.lastText) return;
+    label.lastText = text;
+    const { ctx, canvas, texture } = label;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = `bold ${label.fontSize}px monospace`;
+    ctx.fillStyle = label.textColor || '#ffee88';
+    ctx.textAlign = label.align;
+    ctx.textBaseline = 'middle';
+
+    const lines = String(text).split('\n');
+    const lineHeight = label.lineHeight;
+    const startY = canvas.height / 2 - (lineHeight * (lines.length - 1)) / 2;
+    const x = label.align === 'left' ? 16 : canvas.width / 2;
+    lines.forEach((line, i) => {
+        ctx.fillText(line, x, startY + i * lineHeight);
+    });
+
+    texture.needsUpdate = true;
+}
+
+// 클릭 좌표 확인 시 먼저 검사할 실제 지오메트리 — 안 맞으면 Z=0 평면으로 대체
+const raycastTargets = [];
+
+// 설비·바닥 모델 — 3ds Max에서 내보낸 GLB(미터 단위, Y-up). 파일 하나를 읽어 설비 A~D에 복제 배치.
+// (이전 FACTORY.glb(50MB)는 바닥 용도로만 쓰여 BASE.glb(2KB)로 대체)
+// 변환: ×1000(m → mm), X축 기준 +90도 회전(Y-up → Z-up) → 원본 CAD(mm) 좌표 그대로 복원.
+const MACHINE_PART_FILES = { base: 'BASE.glb', body: 'BODY.glb', x: 'XBODY.glb', y: 'YBODY.glb', z: 'ZBODY.glb' };
+const MACHINE_MODEL_SCALE = 1000;
+// 세트별 배치 위치(mm) — 이전 FACTORY.glb 안 설비 몸체(BODY~BODY003) 자리에 맞춘 값.
+// BASE 윗면과 BODY 바닥이 Z=10mm에 놓임
+const SET_MACHINE_OFFSET = {
+    A: [1119.3, 2035.9, 910.0],
+    B: [4968.6, 2035.9, 910.0],
+    C: [8818.0, 2035.9, 910.0],
+    D: [12667.3, 2035.9, 910.0],
+};
+
+const machineTemplates = {}; // key -> Promise<Object3D>
+function loadMachineTemplate(key) {
+    if (!machineTemplates[key]) {
+        const fileName = MACHINE_PART_FILES[key];
+        machineTemplates[key] = new Promise((resolve, reject) => {
+            new GLTFLoader().load(`/models/${fileName}`, (gltf) => resolve(gltf.scene), undefined, (err) => {
+                console.error(`${fileName} 로드 실패:`, err);
+                reject(err);
+            });
+        });
+    }
+    return machineTemplates[key];
+}
+
+// 세트마다 복제본 생성 (형상·재질은 템플릿과 공유)
+function addMachinePart(key, set, onLoaded) {
+    loadMachineTemplate(key).then((template) => {
+        const obj = template.clone(true);
+        obj.traverse((child) => {
+            if (child.isMesh) {
+                const mats = Array.isArray(child.material) ? child.material : [child.material];
+                mats.forEach((m) => { if (m) m.side = THREE.DoubleSide; });
+            }
+        });
+        obj.scale.setScalar(MACHINE_MODEL_SCALE);
+        obj.rotation.x = Math.PI / 2;
+        obj.position.set(...SET_MACHINE_OFFSET[set]);
+        scene.add(obj);
+        obj.updateMatrixWorld(true);
+        if (onLoaded) onLoaded(obj);
+    }).catch(() => { /* 로드 실패는 loadMachineTemplate 에서 콘솔 출력 */ });
+}
+
+// DB 신호가 없을 때 사용하는 랜덤 이동 — 범위 안의 랜덤 목표 지점으로 랜덤 시간 동안 이동
+const RANDOM_MOVE_MIN_DURATION = 2; // 초
+const RANDOM_MOVE_MAX_DURATION = 6; // 초
+
+function createRandomMover(min, max) {
+    const pick = () => min + Math.random() * (max - min);
+    const pickDuration = () => RANDOM_MOVE_MIN_DURATION + Math.random() * (RANDOM_MOVE_MAX_DURATION - RANDOM_MOVE_MIN_DURATION);
+    const state = { from: pick(), to: pick(), duration: pickDuration(), elapsed: 0 };
+    return {
+        // 현재 위치에서 이어서 움직이도록 시작점 재설정 (DB → 랜덤 전환 시 튐 방지)
+        reset(from) {
+            state.from = from;
+            state.to = pick();
+            state.duration = pickDuration();
+            state.elapsed = 0;
+        },
+        update(dt) {
+            state.elapsed += dt;
+            const t = Math.min(1, state.elapsed / state.duration);
+            const eased = (1 - Math.cos(Math.PI * t)) / 2;
+            const value = state.from + (state.to - state.from) * eased;
+            if (t >= 1) {
+                state.from = state.to;
+                state.to = pick();
+                state.duration = pickDuration();
+                state.elapsed = 0;
+            }
+            return value;
+        },
+    };
+}
+
+// 세트(A~D)별 현재 이동값 라벨
+const axisStatusLabels = {}; // set -> textSprite
+Object.entries(AXIS_STATUS_LABEL_POS).forEach(([set, pos]) => {
+    const label = createTextSprite('#ffffff');
+    label.sprite.position.set(pos[0], pos[1], pos[2]);
+    scene.add(label.sprite);
+    axisStatusLabels[set] = label;
+});
+
+// 설비별 정보 텍스트박스 (날짜/일일 생산량/알람/장비정보) — X축 모델(XBODY) 로드 시 생성
+const INFO_LABEL_RAISE = 400; // 좌표 라벨로부터 Z로 띄우는 간격(mm)
+// 설비별 일일 생산량 (고정값)
+const SET_DAILY_OUTPUT = {
+    A: '2.4', // 목공소 봄
+    B: '4.3', // 이레공방
+    C: '3', // 브랜드스미스
+    D: '5', // 비스트럭처
+};
+const todayLabel = (() => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+})();
+function buildXAxisInfoText(set) {
+    return `날짜 : ${todayLabel}\n` +
+        `일일 생산량 : ${SET_DAILY_OUTPUT[set] ?? '-'}\n` +
+        `알람 : -\n` +
+        `장비정보 : ${SET_NAMES[set]}`;
+}
+
+// 세트 안에서만 Y→X, X→Z로 이동값이 이어짐(갠트리 구조), 세트끼리는 독립.
+const setBoxes = {}; // set -> 이동 범위 포함 박스 (전체 화면 맞춤용)
+
+// 세트의 X/Y/Z 파트 3개가 모두 로드되면 해당 화면을 모델에 맞춤
+function onAxisPartLoaded(set) {
+    const e = axisSets[set];
+    if (!e.xPart || !e.yPart || !e.zPart || !e.bodyPart) return;
+    const view = views.find((v) => v.set === set);
+    if (!view) return;
+
+    const box = new THREE.Box3();
+    [e.xPart, e.yPart, e.zPart].forEach((part) => {
+        part.updateMatrixWorld(true);
+        box.expandByObject(part);
+    });
+    // 축이 움직이는 범위까지 포함해서 화면에서 벗어나지 않게 확장
+    box.min.x += Math.min(...AXIS_MOVE_RANGE.x);
+    box.max.x += Math.max(...AXIS_MOVE_RANGE.x);
+    box.min.y += Math.min(...AXIS_MOVE_RANGE.y);
+    box.max.y += Math.max(...AXIS_MOVE_RANGE.y);
+    box.min.z += Math.min(...AXIS_MOVE_RANGE.z);
+    box.max.z += Math.max(...AXIS_MOVE_RANGE.z);
+    box.expandByObject(e.bodyPart); // 고정 몸체(BODY)도 화면 안에 들어오게
+    fitViewToBox(view, box);
+
+    // 설비 A~D가 모두 로드되면 전체 화면을 4대 전체에 맞춤
+    setBoxes[set] = box.clone();
+    if (VIEW_SETS.every((s) => setBoxes[s])) {
+        const all = new THREE.Box3();
+        VIEW_SETS.forEach((s) => all.union(setBoxes[s]));
+        fitViewToBox(overviewView, all);
+    }
+}
+
+VIEW_SETS.forEach((set) => {
+    const entry = {
+        xMover: createRandomMover(...AXIS_MOVE_RANGE.x),
+        yMover: createRandomMover(...AXIS_MOVE_RANGE.y),
+        zMover: createRandomMover(...AXIS_MOVE_RANGE.z),
+        lastPos: { x: 0, y: 0, z: 0 }, // 마지막으로 화면에 반영한 이동값
+        usingRandom: false, // 현재 랜덤 이동 중인지 (전환 시점 판단용)
+        bodyPart: null, xPart: null, yPart: null, zPart: null,
+        xBaseX: 0, xBaseY: 0, yBaseY: 0, zBaseX: 0, zBaseY: 0, zBaseZ: 0,
+    };
+    axisSets[set] = entry;
+
+    addMachinePart('base', set, (obj) => {
+        raycastTargets.push(obj); // 바닥 클릭 시 바닥 표면 좌표 확인
+    });
+    addMachinePart('body', set, (obj) => {
+        entry.bodyPart = obj;
+        raycastTargets.push(obj);
+        onAxisPartLoaded(set);
+    });
+    addMachinePart('x', set, (obj) => {
+        entry.xPart = obj;
+        entry.xBaseX = obj.position.x;
+        entry.xBaseY = obj.position.y;
+
+        const [sx, sy, sz] = AXIS_STATUS_LABEL_POS[set];
+        const label = createTextSprite('#ffee88', { width: 512, height: 220, scale: [1000, 430], fontSize: 30, lineHeight: 36, align: 'left' });
+        label.sprite.position.set(sx, sy, sz + INFO_LABEL_RAISE);
+        scene.add(label.sprite);
+        updateTextSprite(label, buildXAxisInfoText(set));
+        onAxisPartLoaded(set);
+    });
+    addMachinePart('y', set, (obj) => {
+        entry.yPart = obj;
+        entry.yBaseY = obj.position.y;
+        onAxisPartLoaded(set);
+    });
+    addMachinePart('z', set, (obj) => {
+        entry.zPart = obj;
+        entry.zBaseX = obj.position.x;
+        entry.zBaseY = obj.position.y;
+        entry.zBaseZ = obj.position.z;
+        onAxisPartLoaded(set);
+    });
+});
+
+// ---------------------------------------------------------------------
+// 클릭 — 클릭한 화면을 조작 대상으로 선택하고, 그 화면 카메라 기준으로 좌표 확인
+// ---------------------------------------------------------------------
+const raycaster = new THREE.Raycaster();
+const clickPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const clickPoint = new THREE.Vector3();
+const clickNdc = new THREE.Vector2();
+
+const clickMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(CLICK_MARKER_RADIUS, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0xff33ff })
+);
+clickMarker.visible = false;
+scene.add(clickMarker);
+
+const clickLabel = createTextSprite('#ff99ff');
+clickLabel.sprite.visible = false;
+scene.add(clickLabel.sprite);
+
+renderer.domElement.addEventListener('click', (e) => {
+    if (suppressNextClick) { // 드래그(회전·이동)로 끝난 클릭은 좌표 확인 안 함
+        suppressNextClick = false;
+        return;
+    }
+    const view = viewAtPoint(e.clientX, e.clientY);
+    activeView = view;
+    if (!overviewMode) gridActiveView = view;
+    updateActiveFrame();
+    renderMachinePanel();
+
+    const r = getViewRect(view);
+    clickNdc.set(
+        ((e.clientX - r.x) / r.w) * 2 - 1,
+        -((e.clientY - r.y) / r.h) * 2 + 1
+    );
+    raycaster.setFromCamera(clickNdc, view.camera);
+    const hits = raycastTargets.length ? raycaster.intersectObjects(raycastTargets, true) : [];
+    if (hits.length) {
+        clickPoint.copy(hits[0].point);
+    } else if (!raycaster.ray.intersectPlane(clickPlane, clickPoint)) {
+        return;
+    }
+
+    clickMarker.position.copy(clickPoint);
+    clickMarker.visible = true;
+    clickLabel.sprite.position.set(clickPoint.x, clickPoint.y, clickPoint.z + 200);
+    clickLabel.sprite.visible = true;
+    updateTextSprite(clickLabel, `X:${Math.round(clickPoint.x)} Y:${Math.round(clickPoint.y)} Z:${Math.round(clickPoint.z)}`);
+});
+
+window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    allViews.forEach(updateViewCamera);
+});
+
+// ---------------------------------------------------------------------
+// 이동/회전 — 선택된 화면(activeView)에만 적용
+// ---------------------------------------------------------------------
 const keyStates = {};
 document.addEventListener('keydown', (e) => { keyStates[e.code] = true; });
 document.addEventListener('keyup', (e) => { keyStates[e.code] = false; });
 
-// 마우스 클릭시 포인터 잠금
-document.body.addEventListener('click', () => {
-    document.body.requestPointerLock();
+function updateActiveViewByKeys(dt) {
+    const v = activeView;
+    const dist = MOVE_SPEED * dt;
+    if (keyStates['KeyW']) v.target.y += dist;
+    if (keyStates['KeyS']) v.target.y -= dist;
+    if (keyStates['KeyA']) v.target.x -= dist;
+    if (keyStates['KeyD']) v.target.x += dist;
+    if (keyStates['KeyQ']) v.target.z += dist; // 상승
+    if (keyStates['KeyE']) v.target.z -= dist; // 하강
+    if (keyStates['ArrowLeft']) v.azimuth += ROTATE_SPEED * dt;
+    if (keyStates['ArrowRight']) v.azimuth -= ROTATE_SPEED * dt;
+    if (keyStates['ArrowUp']) v.elevation = Math.min(ORBIT_ELEVATION_MAX, v.elevation + ROTATE_SPEED * dt);
+    if (keyStates['ArrowDown']) v.elevation = Math.max(ORBIT_ELEVATION_MIN, v.elevation - ROTATE_SPEED * dt);
+    if (keyStates['KeyZ']) v.viewHeight = Math.max(MIN_VIEW_HEIGHT, v.viewHeight * (1 - ZOOM_SPEED * dt)); // 확대
+    if (keyStates['KeyX']) v.viewHeight = v.viewHeight * (1 + ZOOM_SPEED * dt); // 축소
+}
+
+// ---------------------------------------------------------------------
+// 마우스 드래그 — 누른 화면에 적용 (그 화면이 조작 대상으로 선택됨)
+//   왼쪽 버튼 드래그: 회전 (좌우 = 방향, 상하 = 고도)
+//   오른쪽·가운데 버튼 드래그 또는 Shift + 왼쪽 드래그: 화면 이동(패닝)
+// 조금만 움직이고 뗀 경우(DRAG_THRESHOLD_PX 이하)는 기존처럼 클릭 = 화면 선택·좌표 확인
+// ---------------------------------------------------------------------
+const MOUSE_ROTATE_SPEED = 0.005; // 라디안/픽셀
+const DRAG_THRESHOLD_PX = 4;
+let drag = null; // { view, mode: 'rotate' | 'pan', lastX, lastY, startX, startY, moved }
+let suppressNextClick = false;
+const panRight = new THREE.Vector3();
+const panUp = new THREE.Vector3();
+
+renderer.domElement.style.touchAction = 'none';
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+    const view = viewAtPoint(e.clientX, e.clientY);
+    const pan = e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey);
+    drag = { view, mode: pan ? 'pan' : 'rotate', lastX: e.clientX, lastY: e.clientY, startX: e.clientX, startY: e.clientY, moved: false };
+    suppressNextClick = false;
+    renderer.domElement.setPointerCapture(e.pointerId);
 });
 
-document.body.addEventListener('mousemove', (e) => {
-    if (document.pointerLockElement === document.body) {
-        camera.rotation.y -= e.movementX / 500;
-        camera.rotation.x -= e.movementY / 500;
-        camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+renderer.domElement.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < DRAG_THRESHOLD_PX) return;
+    if (!drag.moved) {
+        drag.moved = true;
+        // 드래그한 화면을 조작 대상으로 선택
+        activeView = drag.view;
+        if (!overviewMode) gridActiveView = drag.view;
+        updateActiveFrame();
+        renderMachinePanel();
+    }
+    const dx = e.clientX - drag.lastX;
+    const dy = e.clientY - drag.lastY;
+    drag.lastX = e.clientX;
+    drag.lastY = e.clientY;
+    const v = drag.view;
+
+    if (drag.mode === 'rotate') {
+        v.azimuth -= dx * MOUSE_ROTATE_SPEED;
+        v.elevation = Math.min(ORBIT_ELEVATION_MAX, Math.max(ORBIT_ELEVATION_MIN, v.elevation + dy * MOUSE_ROTATE_SPEED));
+    } else {
+        // 화면 1픽셀 = viewHeight / 화면 높이(px) mm. 카메라 기준 좌우·상하 방향으로 중심점 이동
+        const mmPerPx = v.viewHeight / getViewRect(v).h;
+        panRight.setFromMatrixColumn(v.camera.matrixWorld, 0);
+        panUp.setFromMatrixColumn(v.camera.matrixWorld, 1);
+        v.target.addScaledVector(panRight, -dx * mmPerPx);
+        v.target.addScaledVector(panUp, dy * mmPerPx);
     }
 });
 
-window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-});
+function endDrag(e) {
+    if (!drag) return;
+    if (drag.moved) suppressNextClick = true;
+    if (renderer.domElement.hasPointerCapture(e.pointerId)) renderer.domElement.releasePointerCapture(e.pointerId);
+    drag = null;
+}
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
 
-// 이동
-const moveSpeed = 50;
-const direction = new THREE.Vector3();
-const front = new THREE.Vector3();
-const right = new THREE.Vector3();
+// 마우스 휠 — 커서가 있는 화면만 확대·축소
+window.addEventListener('wheel', (e) => {
+    const v = viewAtPoint(e.clientX, e.clientY);
+    if (e.deltaY < 0) {
+        v.viewHeight = Math.max(MIN_VIEW_HEIGHT, v.viewHeight * (1 - WHEEL_ZOOM_STEP)); // 확대
+    } else {
+        v.viewHeight = v.viewHeight * (1 + WHEEL_ZOOM_STEP); // 축소
+    }
+}, { passive: true });
+
+// ---------------------------------------------------------------------
+// 루프
+// ---------------------------------------------------------------------
+const timer = new THREE.Timer();
 
 function animate() {
-    requestAnimationFrame(animate);
+    timer.update();
+    const deltaTime = Math.min(0.05, timer.getDelta());
 
-    if (document.pointerLockElement === document.body) {
-        camera.getWorldDirection(front);
-        front.y = 0;
-        front.normalize();
+    updateActiveViewByKeys(deltaTime);
+    visibleViews().forEach(updateViewCamera);
 
-        right.crossVectors(front, new THREE.Vector3(0, 1, 0)).normalize();
-
-        direction.set(0, 0, 0);
-
-        if (keyStates['KeyW']) direction.add(front);
-        if (keyStates['KeyS']) direction.sub(front);
-        if (keyStates['KeyA']) direction.sub(right);
-        if (keyStates['KeyD']) direction.add(right);
-        if (keyStates['KeyE']) direction.y += 1;
-        if (keyStates['KeyQ']) direction.y -= 1;
-
-        direction.normalize().multiplyScalar(moveSpeed * 0.1);
-        camera.position.add(direction);
+    for (const set of VIEW_SETS) {
+        const e = axisSets[set];
+        let p;
+        if (dbOnline[set]) {
+            // DB 신호 수신 중 — DB 좌표 사용. 랜덤에서 넘어온 직후엔 현재 위치에서 DB 위치로 부드럽게 이동
+            if (e.usingRandom && dbPos[set]) dbPos[set].current = { ...e.lastPos };
+            e.usingRandom = false;
+            p = stepDbPos(set, deltaTime) || e.lastPos;
+        } else {
+            // DB 신호 없음 — 예전처럼 랜덤 이동. 전환 직후엔 현재 위치에서 이어서 움직임
+            if (!e.usingRandom) {
+                e.xMover.reset(e.lastPos.x);
+                e.yMover.reset(e.lastPos.y);
+                e.zMover.reset(e.lastPos.z);
+                e.usingRandom = true;
+            }
+            p = { x: e.xMover.update(deltaTime), y: e.yMover.update(deltaTime), z: e.zMover.update(deltaTime) };
+        }
+        e.lastPos = { x: p.x, y: p.y, z: p.z };
+        const xDelta = p.x;
+        const yDelta = p.y;
+        const zDelta = p.z;
+        if (e.yPart) {
+            e.yPart.position.y = e.yBaseY + yDelta;
+        }
+        if (e.xPart) {
+            e.xPart.position.x = e.xBaseX + xDelta;
+            e.xPart.position.y = e.xBaseY + yDelta;
+        }
+        if (e.zPart) {
+            e.zPart.position.x = e.zBaseX + xDelta;
+            e.zPart.position.y = e.zBaseY + yDelta;
+            e.zPart.position.z = e.zBaseZ + zDelta;
+        }
+        updateTextSprite(axisStatusLabels[set], `X: ${xDelta.toFixed(3)}\nY: ${yDelta.toFixed(3)}\nZ: ${zDelta.toFixed(3)}`);
     }
 
-    renderer.render(scene, camera);
+    // 오른쪽 위 HUD — 선택된 화면의 중심점
+    if (coordsEl) {
+        const p = activeView.target;
+        coordsEl.textContent = `${viewName(activeView)}\nX: ${p.x.toFixed(0)} mm\nY: ${p.y.toFixed(0)} mm\nZ: ${p.z.toFixed(0)} mm`;
+    }
+
+    // 화면을 각 구역(viewport)에 렌더링 — 2×2면 4개, 전체 화면이면 1개. WebGL 좌표는 좌하단 원점
+    renderer.setScissorTest(true);
+    for (const view of visibleViews()) {
+        const r = getViewRect(view);
+        const glY = window.innerHeight - r.y - r.h;
+        renderer.setViewport(r.x, glY, r.w, r.h);
+        renderer.setScissor(r.x, glY, r.w, r.h);
+        renderer.render(scene, view.camera);
+        renderAxisGizmo(view, r.x, glY);
+    }
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
 }
-animate();
+renderer.setAnimationLoop(animate);
