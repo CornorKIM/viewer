@@ -13,12 +13,8 @@ const ZOOM_SPEED = 1.5; // 초당 배율 변화량 (Z/X)
 const WHEEL_ZOOM_STEP = 0.1; // 마우스휠 한 틱당 확대·축소 비율 (10%)
 const MIN_VIEW_HEIGHT = 50; // 최대 확대 한계(mm)
 
-const SENSOR_POLL_INTERVAL = 1000;
 const MACHINE_POLL_INTERVAL = 1000;
 const CLICK_MARKER_RADIUS = 40;
-
-const GIZMO_SIZE_PX = 90;
-const GIZMO_MARGIN_PX = 10;
 
 // 화면 번호(1~4) → 모델(설비 세트). 순서 변경 시 이 배열만 수정.
 const VIEW_SETS = ['A', 'B', 'C', 'D'];
@@ -30,7 +26,29 @@ const SET_NAMES = {
     C: '브랜드스미스',
     D: '비스트럭처',
 };
+
+// 업체별 핵심성과지표(KPI) — 출처: 2-3 공동형 최종보고서 「4개사 KPI·산출근거 정리」
+// 망소특성 개선율 = (구축 전 − 구축 후) / 구축 전 × 100, 종합 = 지표별 개선율 × 가중치 합
+const SET_KPI = {
+    A: { product: '원목 테이블', items: [
+        { code: 'P', name: '제조 리드타임', unit: '일', before: 10, target: 5, after: 4.5, weight: 0.5 },
+        { code: 'C', name: '공정 작업공수', unit: 'MD', before: 3, target: 1.5, after: 1.25, weight: 0.5 },
+    ] },
+    B: { product: '원목 사방탁자', items: [
+        { code: 'P', name: '제조 리드타임', unit: '일', before: 15, target: 7.5, after: 7, weight: 0.5 },
+        { code: 'C', name: '공정 작업공수', unit: 'MD', before: 4, target: 2, after: 1.75, weight: 0.5 },
+    ] },
+    C: { product: '원목 의자', items: [
+        { code: 'P', name: '제조 리드타임', unit: '일', before: 12, target: 6, after: 5.5, weight: 0.5 },
+        { code: 'C', name: '공정 작업공수', unit: 'MD', before: 4, target: 2, after: 1.75, weight: 0.5 },
+    ] },
+    D: { product: '원목 서랍장', items: [
+        { code: 'P', name: '제조 리드타임', unit: '일', before: 20, target: 10, after: 9, weight: 0.5 },
+        { code: 'C', name: '공정 작업공수', unit: 'MD', before: 5, target: 2.5, after: 2.25, weight: 0.5 },
+    ] },
+};
 const VIEW_FIT_MARGIN = 1.3; // 모델이 화면에 꽉 차지 않도록 여유 배율
+const OVERVIEW_FIT_MARGIN = 1.7; // 전체 화면 — 네 모서리의 토글·표·카드에 끝 설비가 가리지 않게 여유를 더 둠
 const VIEW_DEFAULT_HEIGHT = 6000; // 모델 로드 전 임시 화면 세로 범위(mm)
 
 // 축 이동 범위(기준 위치 대비 오프셋, mm) — DB 좌표 범위 제한과 화면 맞춤(fit)에 공통 사용
@@ -41,13 +59,30 @@ const AXIS_MOVE_RANGE = {
     z: [-100, 200],
 };
 
-// 세트별 고정 라벨 위치 — 모델 로드 전 각 화면의 임시 중심점으로도 사용
-const AXIS_STATUS_LABEL_POS = {
+// 업체(세트) 간 배치 간격 배율 — 원래 공장 배치(X 방향 약 3.85m 간격) 대비.
+// 2×2 화면에서 옆 업체 설비가 보이지 않도록 10배. A 위치는 고정, B~D를 X 방향으로 벌림.
+const SET_SPACING_SCALE = 10;
+// 원래 배치(mm) — 이전 FACTORY.glb 안 설비 몸체(BODY~BODY003) 자리. BASE 윗면과 BODY 바닥이 Z=10mm
+const SET_MACHINE_OFFSET_ORIGINAL = {
+    A: [1119.3, 2035.9, 910.0],
+    B: [4968.6, 2035.9, 910.0],
+    C: [8818.0, 2035.9, 910.0],
+    D: [12667.3, 2035.9, 910.0],
+};
+const spreadSetX = (positions) => Object.fromEntries(Object.entries(positions).map(([set, [x, y, z]]) => {
+    const shift = (SET_MACHINE_OFFSET_ORIGINAL[set][0] - SET_MACHINE_OFFSET_ORIGINAL.A[0]) * (SET_SPACING_SCALE - 1);
+    return [set, [x + shift, y, z]];
+}));
+// 세트별 설비·바닥 배치 위치(mm)
+const SET_MACHINE_OFFSET = spreadSetX(SET_MACHINE_OFFSET_ORIGINAL);
+
+// 세트별 고정 라벨 위치(원래 배치 기준 값을 설비와 같은 만큼 이동) — 모델 로드 전 각 화면의 임시 중심점으로도 사용
+const AXIS_STATUS_LABEL_POS = spreadSetX({
     A: [1233, 833, 0],
     B: [5446, 1376, 10],
     C: [9501, 1201, 10],
     D: [13316, 1089, 10],
-};
+});
 
 // 등각투상 시작 각도
 const ORBIT_RADIUS = 3000 * Math.sqrt(3);
@@ -173,7 +208,7 @@ function updateViewCamera(view) {
 }
 
 // 모델 박스(이동 범위 포함)가 화면에 들어오도록 중심점·배율 자동 설정
-function fitViewToBox(view, box) {
+function fitViewToBox(view, box, margin = VIEW_FIT_MARGIN) {
     view.target.copy(box.getCenter(new THREE.Vector3()));
     updateViewCamera(view);
 
@@ -192,7 +227,7 @@ function fitViewToBox(view, box) {
     }
     const { w, h } = getViewRect(view);
     const aspect = w / h;
-    view.viewHeight = Math.max(MIN_VIEW_HEIGHT, Math.max(2 * maxY, (2 * maxX) / aspect) * VIEW_FIT_MARGIN);
+    view.viewHeight = Math.max(MIN_VIEW_HEIGHT, Math.max(2 * maxY, (2 * maxX) / aspect) * margin);
     updateViewCamera(view);
 }
 
@@ -223,6 +258,149 @@ overviewTitle.textContent = OVERVIEW_NAME;
 overviewFrame.appendChild(overviewTitle);
 if (viewGridEl) viewGridEl.after(overviewFrame);
 
+// ---------------------------------------------------------------------
+// 핵심성과지표(KPI) 카드 — 2×2: 화면마다 해당 업체, 전체 화면: 4개사 비교표. 단축키 K.
+// ---------------------------------------------------------------------
+const kpiImprovement = (item) => ((item.before - item.after) / item.before) * 100;
+const kpiTotal = (set) => SET_KPI[set].items.reduce((sum, item) => sum + kpiImprovement(item) * item.weight, 0);
+const fmtPct = (v) => `${v.toFixed(2)}%`;
+
+function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+}
+
+function buildKpiTable(headers, rows) {
+    const table = el('table');
+    const headRow = el('tr');
+    headers.forEach((h) => headRow.appendChild(el('th', null, h)));
+    table.appendChild(el('thead')).appendChild(headRow);
+    const body = table.appendChild(el('tbody'));
+    rows.forEach((cells) => {
+        const tr = body.appendChild(el('tr'));
+        cells.forEach(([text, cls]) => tr.appendChild(el('td', cls, text)));
+    });
+    return table;
+}
+
+function buildKpiCard(set) {
+    const card = el('div', 'kpi-card');
+    card.id = `kpi-${set}`;
+    const head = card.appendChild(el('div', 'kpi-head'));
+    head.appendChild(el('span', null, `핵심성과지표 · ${SET_KPI[set].product}`));
+    head.appendChild(el('span', 'kpi-total', `종합 ${fmtPct(kpiTotal(set))}`));
+    card.appendChild(buildKpiTable(
+        ['지표', '구축 전', '목표', '구축 후', '개선율'],
+        SET_KPI[set].items.map((item) => [
+            [`${item.code} ${item.name}(${item.unit})`],
+            [String(item.before), 'num'],
+            [String(item.target), 'num'],
+            [String(item.after), 'num'],
+            [fmtPct(kpiImprovement(item)), 'num kpi-rate'],
+        ])
+    ));
+    return card;
+}
+
+views.forEach((view, i) => viewFrames[i].appendChild(buildKpiCard(view.set)));
+
+const kpiOverviewCard = el('div', 'kpi-card');
+kpiOverviewCard.id = 'kpi-overview';
+kpiOverviewCard.appendChild(el('div', 'kpi-head')).appendChild(el('span', null, '핵심성과지표 · 4개사 (구축 전 → 구축 후)'));
+kpiOverviewCard.appendChild(buildKpiTable(
+    ['업체', '기준 제품', 'P 리드타임(일)', 'C 작업공수(MD)', '종합 개선율'],
+    VIEW_SETS.map((set) => {
+        const [p, c] = SET_KPI[set].items;
+        return [
+            [SET_NAMES[set]],
+            [SET_KPI[set].product],
+            [`${p.before} → ${p.after}`, 'num'],
+            [`${c.before} → ${c.after}`, 'num'],
+            [fmtPct(kpiTotal(set)), 'num kpi-total'],
+        ];
+    })
+));
+overviewFrame.appendChild(kpiOverviewCard);
+
+// ---------------------------------------------------------------------
+// 설비 데이터 카드(화면 우상단) — 2×2: 화면마다 해당 업체, 전체 화면: 4개사 비교표. 단축키 V.
+// 내용은 pollMachine 응답마다 renderMachinePanel()에서 갱신.
+// ---------------------------------------------------------------------
+const machineCards = {}; // set -> element
+views.forEach((view, i) => {
+    const card = el('div', 'machine-card');
+    card.id = `machine-${view.set}`;
+    card.appendChild(el('div', 'machine-sub', '(수신 대기)'));
+    viewFrames[i].appendChild(card);
+    machineCards[view.set] = card;
+});
+const machineOverviewCard = el('div', 'machine-card');
+machineOverviewCard.id = 'machine-overview';
+overviewFrame.appendChild(machineOverviewCard);
+
+// ---------------------------------------------------------------------
+// 모델 앞 실시간 축 이동값 라벨 — Z축 헤드 위(로드 전엔 AXIS_STATUS_LABEL_POS)를 각 화면에 투영해 HTML로 표시.
+// 헤드를 따라 움직임. 2×2: 화면마다 해당 업체 1개, 전체 화면: 4개(업체명 포함). 값 = 세트별 X/Y/Z 이동값(mm).
+// ---------------------------------------------------------------------
+const COORD_AXES = ['x', 'y', 'z'];
+const coordLabels = []; // { view, set, box, values, anchor }
+function addCoordLabel(view, set, frame, showName) {
+    const box = el('div', 'coord-label');
+    if (showName) box.appendChild(el('div', 'coord-name', SET_NAMES[set]));
+    const values = {};
+    for (const axis of COORD_AXES) {
+        const row = box.appendChild(el('div', 'coord-row'));
+        row.appendChild(el('span', `coord-axis ax-${axis}`, axis.toUpperCase()));
+        values[axis] = row.appendChild(el('span', 'coord-value', '-'));
+        row.appendChild(el('span', 'coord-unit', 'mm'));
+    }
+    frame.appendChild(box);
+    coordLabels.push({ view, set, box, values, anchor: new THREE.Vector3(...AXIS_STATUS_LABEL_POS[set]) });
+}
+views.forEach((view, i) => addCoordLabel(view, view.set, viewFrames[i], false));
+VIEW_SETS.forEach((set) => addCoordLabel(overviewView, set, overviewFrame, true));
+
+const coordProjected = new THREE.Vector3();
+const formatSignedMm = (v) => `${v < 0 ? '-' : '+'}${Math.abs(v).toFixed(3)}`;
+function updateCoordLabels() {
+    const shown = visibleViews();
+    for (const label of coordLabels) {
+        if (!shown.includes(label.view)) continue; // 숨긴 프레임 안에 있으므로 갱신 불필요
+        const e = axisSets[label.set];
+        if (e && e.zPart && e.zLabelOffset) coordProjected.copy(e.zPart.position).add(e.zLabelOffset);
+        else coordProjected.copy(label.anchor);
+        coordProjected.project(label.view.camera);
+        const inView = Math.abs(coordProjected.x) <= 1 && Math.abs(coordProjected.y) <= 1 && coordProjected.z <= 1;
+        label.box.style.display = inView ? '' : 'none';
+        if (!inView) continue;
+        const r = getViewRect(label.view);
+        label.box.style.left = `${((coordProjected.x + 1) / 2) * r.w}px`;
+        label.box.style.top = `${((1 - coordProjected.y) / 2) * r.h}px`;
+        const pos = e ? e.lastPos : null;
+        for (const axis of COORD_AXES) {
+            const text = pos ? formatSignedMm(pos[axis]) : '-';
+            if (label.values[axis].textContent !== text) label.values[axis].textContent = text;
+        }
+    }
+}
+
+// 화면 높이가 낮으면 1번 화면 KPI 카드가 좌상단 토글 패널에 가려지므로 패널 오른쪽으로 비켜 놓음
+function placeKpiCards() {
+    const togglesEl = document.getElementById('toggles');
+    if (!togglesEl) return;
+    const t = togglesEl.getBoundingClientRect();
+    document.querySelectorAll('.kpi-card').forEach((card) => {
+        card.style.left = '';
+        const r = card.getBoundingClientRect();
+        if (r.width === 0 || !card.offsetParent) return; // 숨김 상태
+        const overlaps = r.left < t.right && r.right > t.left && r.top < t.bottom && r.bottom > t.top;
+        if (overlaps) card.style.left = `${t.right - card.offsetParent.getBoundingClientRect().left + 10}px`;
+    });
+}
+window.addEventListener('resize', placeKpiCards);
+
 function updateActiveFrame() {
     viewFrames.forEach((frame, i) => frame.classList.toggle('active', views[i] === activeView));
 }
@@ -235,17 +413,19 @@ function setOverviewMode(on) {
     overviewFrame.classList.toggle('hidden', !on);
     activeView = on ? overviewView : gridActiveView;
     updateActiveFrame();
+    placeKpiCards();
 }
 
 // ---------------------------------------------------------------------
-// 표시 on/off 토글 — 우측 좌표 팝업(#coords), 우측 신호값 팝업(#sensor, #machine), 하단 조작법(#info)
-// 상태는 브라우저에 저장되어 새로고침 후에도 유지. 단축키 C(좌표), V(신호값), H(조작법).
+// 표시 on/off 토글 — 우측 좌표 팝업(#coords), 우측 설비 데이터 팝업(#machine), 하단 조작법(#info), KPI 카드
+// 상태는 브라우저에 저장되어 새로고침 후에도 유지. 단축키 C(좌표), V(데이터), H(조작법), K(KPI).
 // ---------------------------------------------------------------------
 const DISPLAY_TOGGLES = [
     { key: 'overview', buttonId: 'toggleOverview', targetIds: [], label: '전체 화면', hotkey: 'KeyF', defaultOn: false, onChange: setOverviewMode },
     { key: 'coords', buttonId: 'toggleCoords', targetIds: ['coords'], label: '좌표', hotkey: 'KeyC' },
-    { key: 'signals', buttonId: 'toggleSignals', targetIds: ['sensor', 'machine'], label: '신호값', hotkey: 'KeyV' },
+    { key: 'signals', buttonId: 'toggleSignals', targetIds: [...VIEW_SETS.map((set) => `machine-${set}`), 'machine-overview'], label: '데이터', hotkey: 'KeyV' },
     { key: 'help', buttonId: 'toggleHelp', targetIds: ['info'], label: '조작법', hotkey: 'KeyH' },
+    { key: 'kpi', buttonId: 'toggleKpi', targetIds: [...VIEW_SETS.map((set) => `kpi-${set}`), 'kpi-overview'], label: 'KPI', hotkey: 'KeyK', onChange: placeKpiCards },
 ];
 const TOGGLE_STORAGE_PREFIX = 'viewer.toggle.';
 
@@ -302,125 +482,49 @@ document.addEventListener('keydown', (e) => {
     writeToggleState(t.key, t.visible);
 });
 
-// ---------------------------------------------------------------------
-// 화면별 WCS 방향 기즈모 (각 화면 좌하단)
-// ---------------------------------------------------------------------
-const gizmoScene = new THREE.Scene();
-const gizmoCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 10);
-gizmoScene.add(new THREE.AxesHelper(1));
-
-function makeAxisLabelSprite(text, color) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = color;
-    ctx.font = 'bold 44px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, 32, 34);
-    const texture = new THREE.CanvasTexture(canvas);
-    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
-    const sprite = new THREE.Sprite(material);
-    sprite.scale.set(0.45, 0.45, 1);
-    return sprite;
-}
-
-const gizmoLabelX = makeAxisLabelSprite('X', '#ff5555');
-gizmoLabelX.position.set(1.3, 0, 0);
-gizmoScene.add(gizmoLabelX);
-const gizmoLabelY = makeAxisLabelSprite('Y', '#55ff55');
-gizmoLabelY.position.set(0, 1.3, 0);
-gizmoScene.add(gizmoLabelY);
-const gizmoLabelZ = makeAxisLabelSprite('Z', '#5599ff');
-gizmoLabelZ.position.set(0, 0, 1.3);
-gizmoScene.add(gizmoLabelZ);
-
-// 렌더러 viewport/scissor는 CSS px 단위, 원점은 좌하단
-function renderAxisGizmo(view, glX, glY) {
-    gizmoCamera.position.set(0, 0, 3).applyQuaternion(view.camera.quaternion);
-    gizmoCamera.quaternion.copy(view.camera.quaternion);
-
-    const x = glX + GIZMO_MARGIN_PX;
-    const y = glY + GIZMO_MARGIN_PX;
-    renderer.setViewport(x, y, GIZMO_SIZE_PX, GIZMO_SIZE_PX);
-    renderer.setScissor(x, y, GIZMO_SIZE_PX, GIZMO_SIZE_PX);
-    renderer.autoClear = false;
-    renderer.clearDepth();
-    renderer.render(gizmoScene, gizmoCamera);
-    renderer.autoClear = true;
-}
-
 // 오른쪽 위 좌표 HUD
 const coordsEl = document.getElementById('coords');
 
-// ---------------------------------------------------------------------
-// InfluxDB 센서 값 (RSSI) — /api/sensor (Vercel 서버리스 함수)를 통해서만 조회.
-// ---------------------------------------------------------------------
-const sensorEl = document.getElementById('sensor');
-
-function fieldLine(label, entry) {
-    if (!entry || entry.value === undefined || Number.isNaN(entry.value)) {
-        return `${label}: -`;
-    }
-    return `${label}: ${entry.value}`;
-}
-
-async function pollSensor() {
-    if (!sensorEl) return;
-    try {
-        const res = await fetch('/api/sensor', { cache: 'no-store' });
-        const data = await res.json();
-        if (!res.ok) {
-            sensorEl.textContent = 'RSSI: (데이터 없음)\nch1: -\nch2: -\nch3: -';
-            return;
+// 응답(DB 조회 수 초)이 폴링 주기보다 느려도 요청이 쌓이지 않게: 이전 요청이 끝난 뒤 주기만큼 쉬고 다시 조회
+function startPolling(fn, interval) {
+    const tick = async () => {
+        try {
+            await fn();
+        } finally {
+            setTimeout(tick, interval);
         }
-
-        sensorEl.textContent =
-            `${fieldLine('RSSI', data.RSSI)}\n` +
-            `${fieldLine('ch1', data.ch1)}\n` +
-            `${fieldLine('ch2', data.ch2)}\n` +
-            `${fieldLine('ch3', data.ch3)}`;
-    } catch (err) {
-        sensorEl.textContent = 'RSSI: (연결 실패)';
-    }
-}
-
-if (sensorEl) {
-    pollSensor();
-    setInterval(pollSensor, SENSOR_POLL_INTERVAL);
+    };
+    tick();
 }
 
 // ---------------------------------------------------------------------
 // 설비 실제 위치 (PostgreSQL, syntec_cnc.raw_data) — /api/machine (Vercel 서버리스
 // 함수)를 통해서만 조회.
 // ---------------------------------------------------------------------
-const machineEl = document.getElementById('machine');
 
+// 설비 데이터 카드 항목 — DB(collected_data) 필드 → 화면 항목명, group 단위로 묶어 표시.
+// toMm: DB 좌표 원값 × DB_POS_TO_MM(0.001) → mm 소수 3자리 (584922.0 → 584.922).
+// rpm·mm/min 단위는 Syntec 일반 단위 기준.
 const MACHINE_RAW_FIELDS = [
-    { key: 'core_status', type: 'int' },
-    { key: 'core_mode', type: 'int' },
-    { key: 'core_count', type: 'int' },
-    { key: 'core_program', type: 'string' },
-    { key: 'core_alarm', type: 'string' },
-    { key: 'pos_x', type: 'float' },
-    { key: 'pos_y', type: 'float' },
-    { key: 'pos_z', type: 'float' },
-    { key: 'pos_y_slave', type: 'float' },
-    { key: 'tcp_x', type: 'float' },
-    { key: 'tcp_y', type: 'float' },
-    { key: 'tcp_z', type: 'float' },
-    { key: 'pwr_spindle', type: 'float' },
-    { key: 'load_spindle', type: 'float' },
-    { key: 'speed_spindle', type: 'float' },
-    { key: 'feedrate', type: 'float' },
-    { key: 'tool_id', type: 'int' },
-    { key: 'override_feed', type: 'int' },
+    { key: 'core_status', type: 'int', group: '운전', label: '운전 상태', codes: 'status' },
+    { key: 'core_mode', type: 'int', group: '운전', label: '운전 모드', codes: 'mode' },
+    { key: 'core_count', type: 'int', group: '운전', label: '가공 횟수' },
+    { key: 'core_program', type: 'string', group: '운전', label: '실행 프로그램' },
+    { key: 'core_alarm', type: 'string', group: '운전', label: '알람' },
+    { key: 'pos_x', type: 'float', group: '위치 (mm)', label: '기계 좌표 X', toMm: true },
+    { key: 'pos_y', type: 'float', group: '위치 (mm)', label: '기계 좌표 Y', toMm: true },
+    { key: 'pos_z', type: 'float', group: '위치 (mm)', label: '기계 좌표 Z', toMm: true },
+    { key: 'speed_spindle', type: 'float', group: '스핀들·이송', label: '스핀들 회전수 (rpm)' },
+    { key: 'pwr_spindle', type: 'float', group: '스핀들·이송', label: '스핀들 전력' },
+    { key: 'feedrate', type: 'float', group: '스핀들·이송', label: '이송 속도 (mm/min)' },
+    { key: 'tool_id', type: 'int', group: '스핀들·이송', label: '공구 번호' },
 ];
-const MACHINE_RAW_LABEL_WIDTH = Math.max(...MACHINE_RAW_FIELDS.map((f) => f.key.length));
+// 운전 상태·모드 코드 → 의미. 수집 장비 제공사 코드표 확인 후 입력 (예: status: { 1: '가동' }).
+// 비어 있으면 숫자만 표시.
+const MACHINE_CODE_LABELS = { status: {}, mode: {} };
 
 function formatMachineValue(v, type) {
-    if (v === null || v === undefined) return '-';
+    if (v === null || v === undefined || v === '') return '-';
     if (type === 'string') return String(v);
     const n = Number(v);
     if (Number.isNaN(n)) return String(v);
@@ -435,20 +539,33 @@ function formatCollectedAt(ts) {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-function buildMachineDumpText(raw) {
-    const lines = [`수집 시각: ${formatCollectedAt(raw.created_at)}`];
+function formatMachineField(f, v) {
+    if (f.toMm && v !== null && v !== undefined && v !== '' && !Number.isNaN(Number(v))) {
+        return (Number(v) * DB_POS_TO_MM).toFixed(3);
+    }
+    const text = formatMachineValue(v, f.type);
+    const meaning = f.codes ? MACHINE_CODE_LABELS[f.codes][text] : undefined;
+    return meaning ? `${text} (${meaning})` : text;
+}
+
+function buildMachineTable(raw) {
     // 고정 항목이 하나도 없으면 DB가 내려준 컬럼을 그대로 표시
-    if (!MACHINE_RAW_FIELDS.some((f) => raw[f.key] !== undefined)) {
-        const keys = Object.keys(raw).filter((k) => k !== 'created_at');
-        const width = Math.max(0, ...keys.map((k) => k.length));
-        keys.forEach((k) => lines.push(`${k.padEnd(width, ' ')} : ${formatMachineValue(raw[k], 'float')}`));
-        return lines.join('\n');
+    const fields = MACHINE_RAW_FIELDS.some((f) => raw[f.key] !== undefined)
+        ? MACHINE_RAW_FIELDS
+        : Object.keys(raw).filter((k) => k !== 'created_at').map((k) => ({ key: k, type: 'float', label: k }));
+    const table = el('table');
+    const body = table.appendChild(el('tbody'));
+    let group = null;
+    for (const f of fields) {
+        if (f.group && f.group !== group) {
+            group = f.group;
+            body.appendChild(el('tr', 'machine-group')).appendChild(el('th', null, group)).colSpan = 2;
+        }
+        const tr = body.appendChild(el('tr'));
+        tr.appendChild(el('td', null, f.label));
+        tr.appendChild(el('td', 'num', formatMachineField(f, raw[f.key])));
     }
-    for (const f of MACHINE_RAW_FIELDS) {
-        const label = f.key.padEnd(MACHINE_RAW_LABEL_WIDTH, ' ');
-        lines.push(`${label} : ${formatMachineValue(raw[f.key], f.type)}`);
-    }
-    return lines.join('\n');
+    return table;
 }
 
 // ---------------------------------------------------------------------
@@ -517,18 +634,39 @@ function setDbLinkStatus(set, ok) {
 }
 VIEW_SETS.forEach((set) => setDbLinkStatus(set, false));
 
-// 우측 설비 데이터 팝업 — 선택한 화면의 설비 표시 (전체 화면이면 마지막으로 선택한 설비)
+// 설비 데이터 카드 갱신 — 화면별(해당 업체) 카드 + 전체 화면용 4개사 비교표
 let machinePanelError = '';
-function renderMachinePanel() {
-    if (!machineEl) return;
-    const set = (activeView.isOverview ? gridActiveView : activeView).set;
-    const header = `설비: ${SET_NAMES[set]} (${SET_EQUIPMENT_NO[set]})`;
-    if (machinePanelError) {
-        machineEl.textContent = `${header}\n${machinePanelError}`;
-        return;
+function buildMachineOverviewTable() {
+    const table = el('table');
+    const headRow = table.appendChild(el('thead')).appendChild(el('tr'));
+    ['항목', ...VIEW_SETS.map((set) => SET_NAMES[set])].forEach((h) => headRow.appendChild(el('th', null, h)));
+    const body = table.appendChild(el('tbody'));
+    let group = null;
+    for (const f of MACHINE_RAW_FIELDS) {
+        if (f.group !== group) {
+            group = f.group;
+            body.appendChild(el('tr', 'machine-group')).appendChild(el('th', null, group)).colSpan = VIEW_SETS.length + 1;
+        }
+        const tr = body.appendChild(el('tr'));
+        tr.appendChild(el('td', null, f.label));
+        VIEW_SETS.forEach((set) => tr.appendChild(el('td', 'num', dbRows[set] ? formatMachineField(f, dbRows[set][f.key]) : '-')));
     }
-    const row = dbRows[set];
-    machineEl.textContent = row ? `${header}\n${buildMachineDumpText(row)}` : `${header}\n(데이터 없음)`;
+    return table;
+}
+
+function renderMachinePanel() {
+    for (const set of VIEW_SETS) {
+        const card = machineCards[set];
+        const row = dbRows[set];
+        card.replaceChildren(
+            el('div', 'machine-head', `설비 데이터 · ${SET_EQUIPMENT_NO[set]}`),
+            el('div', 'machine-sub', machinePanelError || (row ? `수집 시각 ${formatCollectedAt(row.created_at)}` : '(데이터 없음)'))
+        );
+        if (!machinePanelError && row) card.appendChild(buildMachineTable(row));
+    }
+    machineOverviewCard.replaceChildren(el('div', 'machine-head', '설비 데이터 · 4개사'));
+    if (machinePanelError) machineOverviewCard.appendChild(el('div', 'machine-sub', machinePanelError));
+    else machineOverviewCard.appendChild(buildMachineOverviewTable());
 }
 
 async function pollMachine() {
@@ -551,8 +689,7 @@ async function pollMachine() {
 }
 
 // 팝업 표시 여부와 관계없이 계속 조회 (모델 연동에 사용)
-pollMachine();
-setInterval(pollMachine, MACHINE_POLL_INTERVAL);
+startPolling(pollMachine, MACHINE_POLL_INTERVAL);
 
 // ---------------------------------------------------------------------
 // 텍스트 스프라이트
@@ -613,14 +750,7 @@ const raycastTargets = [];
 // 변환: ×1000(m → mm), X축 기준 +90도 회전(Y-up → Z-up) → 원본 CAD(mm) 좌표 그대로 복원.
 const MACHINE_PART_FILES = { base: 'BASE.glb', body: 'BODY.glb', x: 'XBODY.glb', y: 'YBODY.glb', z: 'ZBODY.glb' };
 const MACHINE_MODEL_SCALE = 1000;
-// 세트별 배치 위치(mm) — 이전 FACTORY.glb 안 설비 몸체(BODY~BODY003) 자리에 맞춘 값.
-// BASE 윗면과 BODY 바닥이 Z=10mm에 놓임
-const SET_MACHINE_OFFSET = {
-    A: [1119.3, 2035.9, 910.0],
-    B: [4968.6, 2035.9, 910.0],
-    C: [8818.0, 2035.9, 910.0],
-    D: [12667.3, 2035.9, 910.0],
-};
+// 세트별 배치 위치는 상단 SET_MACHINE_OFFSET (업체 간 간격 SET_SPACING_SCALE 적용)
 
 const machineTemplates = {}; // key -> Promise<Object3D>
 function loadMachineTemplate(key) {
@@ -687,36 +817,6 @@ function createRandomMover(min, max) {
     };
 }
 
-// 세트(A~D)별 현재 이동값 라벨
-const axisStatusLabels = {}; // set -> textSprite
-Object.entries(AXIS_STATUS_LABEL_POS).forEach(([set, pos]) => {
-    const label = createTextSprite('#ffffff');
-    label.sprite.position.set(pos[0], pos[1], pos[2]);
-    scene.add(label.sprite);
-    axisStatusLabels[set] = label;
-});
-
-// 설비별 정보 텍스트박스 (날짜/일일 생산량/알람/장비정보) — X축 모델(XBODY) 로드 시 생성
-const INFO_LABEL_RAISE = 400; // 좌표 라벨로부터 Z로 띄우는 간격(mm)
-// 설비별 일일 생산량 (고정값)
-const SET_DAILY_OUTPUT = {
-    A: '2.4', // 목공소 봄
-    B: '4.3', // 이레공방
-    C: '3', // 브랜드스미스
-    D: '5', // 비스트럭처
-};
-const todayLabel = (() => {
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-})();
-function buildXAxisInfoText(set) {
-    return `날짜 : ${todayLabel}\n` +
-        `일일 생산량 : ${SET_DAILY_OUTPUT[set] ?? '-'}\n` +
-        `알람 : -\n` +
-        `장비정보 : ${SET_NAMES[set]}`;
-}
-
 // 세트 안에서만 Y→X, X→Z로 이동값이 이어짐(갠트리 구조), 세트끼리는 독립.
 const setBoxes = {}; // set -> 이동 범위 포함 박스 (전체 화면 맞춤용)
 
@@ -747,7 +847,7 @@ function onAxisPartLoaded(set) {
     if (VIEW_SETS.every((s) => setBoxes[s])) {
         const all = new THREE.Box3();
         VIEW_SETS.forEach((s) => all.union(setBoxes[s]));
-        fitViewToBox(overviewView, all);
+        fitViewToBox(overviewView, all, OVERVIEW_FIT_MARGIN);
     }
 }
 
@@ -775,12 +875,6 @@ VIEW_SETS.forEach((set) => {
         entry.xPart = obj;
         entry.xBaseX = obj.position.x;
         entry.xBaseY = obj.position.y;
-
-        const [sx, sy, sz] = AXIS_STATUS_LABEL_POS[set];
-        const label = createTextSprite('#ffee88', { width: 512, height: 220, scale: [1000, 430], fontSize: 30, lineHeight: 36, align: 'left' });
-        label.sprite.position.set(sx, sy, sz + INFO_LABEL_RAISE);
-        scene.add(label.sprite);
-        updateTextSprite(label, buildXAxisInfoText(set));
         onAxisPartLoaded(set);
     });
     addMachinePart('y', set, (obj) => {
@@ -793,6 +887,10 @@ VIEW_SETS.forEach((set) => {
         entry.zBaseX = obj.position.x;
         entry.zBaseY = obj.position.y;
         entry.zBaseZ = obj.position.z;
+        // 좌표 라벨 기준점 = Z축 헤드 윗면 가운데 (파트 위치 기준 오프셋, 헤드와 함께 이동)
+        const zBox = new THREE.Box3().setFromObject(obj);
+        const zCenter = zBox.getCenter(new THREE.Vector3());
+        entry.zLabelOffset = new THREE.Vector3(zCenter.x, zCenter.y, zBox.max.z).sub(obj.position);
         onAxisPartLoaded(set);
     });
 });
@@ -995,13 +1093,13 @@ function animate() {
             e.zPart.position.y = e.zBaseY + yDelta;
             e.zPart.position.z = e.zBaseZ + zDelta;
         }
-        updateTextSprite(axisStatusLabels[set], `X: ${xDelta.toFixed(3)}\nY: ${yDelta.toFixed(3)}\nZ: ${zDelta.toFixed(3)}`);
     }
 
-    // 오른쪽 위 HUD — 선택된 화면의 중심점
+    // 상단 가운데 HUD — 선택된 화면의 중심점
     if (coordsEl) {
         const p = activeView.target;
-        coordsEl.textContent = `${viewName(activeView)}\nX: ${p.x.toFixed(0)} mm\nY: ${p.y.toFixed(0)} mm\nZ: ${p.z.toFixed(0)} mm`;
+        const text = `${viewName(activeView)} 화면 중심  X ${p.x.toFixed(0)}  Y ${p.y.toFixed(0)}  Z ${p.z.toFixed(0)} mm`;
+        if (coordsEl.textContent !== text) coordsEl.textContent = text;
     }
 
     // 화면을 각 구역(viewport)에 렌더링 — 2×2면 4개, 전체 화면이면 1개. WebGL 좌표는 좌하단 원점
@@ -1012,9 +1110,9 @@ function animate() {
         renderer.setViewport(r.x, glY, r.w, r.h);
         renderer.setScissor(r.x, glY, r.w, r.h);
         renderer.render(scene, view.camera);
-        renderAxisGizmo(view, r.x, glY);
     }
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+    updateCoordLabels();
 }
 renderer.setAnimationLoop(animate);
