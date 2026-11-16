@@ -27,7 +27,7 @@ const SET_NAMES = {
     D: '비스트럭처',
 };
 
-// 업체별 핵심성과지표(KPI)
+// 업체별 핵심성과지표(KPI) — 구축 전·목표·구축 후 기준값. 화면의 구축 후 값은 날짜별로 kpiDailyAfter에서 정함.
 // 망소특성 개선율 = (구축 전 − 구축 후) / 구축 전 × 100, 종합 = 지표별 개선율 × 가중치 합
 const SET_KPI = {
     A: { product: '원목 테이블', items: [
@@ -261,9 +261,40 @@ if (viewGridEl) viewGridEl.after(overviewFrame);
 // ---------------------------------------------------------------------
 // 핵심성과지표(KPI) 카드 — 2×2: 화면마다 해당 업체, 전체 화면: 4개사 비교표. 단축키 K.
 // ---------------------------------------------------------------------
-const kpiImprovement = (item) => ((item.before - item.after) / item.before) * 100;
-const kpiTotal = (set) => SET_KPI[set].items.reduce((sum, item) => sum + kpiImprovement(item) * item.weight, 0);
+// 날짜별 "구축 후" 값 — 날짜·업체·지표로 정해져 같은 날에는 항상 같은 값.
+// 범위: SET_KPI 구축 후 값 ± (목표 − 구축 후) → 항상 목표 이하(달성), 평균은 SET_KPI 구축 후 값. KPI_DAILY_STEP 단위.
+const KPI_DAILY_STEP = 0.05;
+const KPI_DATE_CHECK_MS = 60 * 1000; // 자정이 지나면 다음 날 값으로 갱신
+
+function kpiDateKey(d = new Date()) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function hashUnit(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    let t = (h + 0x6d2b79f5) | 0;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+function kpiDailyAfter(set, item, dateKey) {
+    const spread = item.target - item.after;
+    const v = item.after + (hashUnit(`${dateKey}|${set}|${item.code}`) * 2 - 1) * spread;
+    const stepped = Math.round(v / KPI_DAILY_STEP) * KPI_DAILY_STEP;
+    return Math.min(item.target, Math.max(KPI_DAILY_STEP, Number(stepped.toFixed(2))));
+}
+
+const kpiImprovement = (item, after) => ((item.before - after) / item.before) * 100;
+const kpiTotal = (set, dateKey) => SET_KPI[set].items.reduce(
+    (sum, item) => sum + kpiImprovement(item, kpiDailyAfter(set, item, dateKey)) * item.weight, 0);
 const fmtPct = (v) => `${v.toFixed(2)}%`;
+const fmtKpiNum = (v) => String(Number(v.toFixed(2)));
 
 function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -285,44 +316,64 @@ function buildKpiTable(headers, rows) {
     return table;
 }
 
-function buildKpiCard(set) {
-    const card = el('div', 'kpi-card');
-    card.id = `kpi-${set}`;
-    const head = card.appendChild(el('div', 'kpi-head'));
+function renderKpiCard(card, set, dateKey) {
+    const head = el('div', 'kpi-head');
     head.appendChild(el('span', null, `핵심성과지표 · ${SET_KPI[set].product}`));
-    head.appendChild(el('span', 'kpi-total', `종합 ${fmtPct(kpiTotal(set))}`));
-    card.appendChild(buildKpiTable(
+    head.appendChild(el('span', 'kpi-total', `종합 ${fmtPct(kpiTotal(set, dateKey))}`));
+    card.replaceChildren(head, buildKpiTable(
         ['지표', '구축 전', '목표', '구축 후', '개선율'],
-        SET_KPI[set].items.map((item) => [
-            [`${item.code} ${item.name}(${item.unit})`],
-            [String(item.before), 'num'],
-            [String(item.target), 'num'],
-            [String(item.after), 'num'],
-            [fmtPct(kpiImprovement(item)), 'num kpi-rate'],
-        ])
+        SET_KPI[set].items.map((item) => {
+            const after = kpiDailyAfter(set, item, dateKey);
+            return [
+                [`${item.code} ${item.name}(${item.unit})`],
+                [fmtKpiNum(item.before), 'num'],
+                [fmtKpiNum(item.target), 'num'],
+                [fmtKpiNum(after), 'num'],
+                [fmtPct(kpiImprovement(item, after)), 'num kpi-rate'],
+            ];
+        })
     ));
-    return card;
 }
 
-views.forEach((view, i) => viewFrames[i].appendChild(buildKpiCard(view.set)));
+function renderKpiOverview(card, dateKey) {
+    const head = el('div', 'kpi-head');
+    head.appendChild(el('span', null, '핵심성과지표 · 4개사 (구축 전 → 구축 후)'));
+    card.replaceChildren(head, buildKpiTable(
+        ['업체', '기준 제품', 'P 리드타임(일)', 'C 작업공수(MD)', '종합 개선율'],
+        VIEW_SETS.map((set) => {
+            const [p, c] = SET_KPI[set].items;
+            return [
+                [SET_NAMES[set]],
+                [SET_KPI[set].product],
+                [`${fmtKpiNum(p.before)} → ${fmtKpiNum(kpiDailyAfter(set, p, dateKey))}`, 'num'],
+                [`${fmtKpiNum(c.before)} → ${fmtKpiNum(kpiDailyAfter(set, c, dateKey))}`, 'num'],
+                [fmtPct(kpiTotal(set, dateKey)), 'num kpi-total'],
+            ];
+        })
+    ));
+}
 
+const kpiCards = views.map((view, i) => {
+    const card = el('div', 'kpi-card');
+    card.id = `kpi-${view.set}`;
+    viewFrames[i].appendChild(card);
+    return { card, set: view.set };
+});
 const kpiOverviewCard = el('div', 'kpi-card');
 kpiOverviewCard.id = 'kpi-overview';
-kpiOverviewCard.appendChild(el('div', 'kpi-head')).appendChild(el('span', null, '핵심성과지표 · 4개사 (구축 전 → 구축 후)'));
-kpiOverviewCard.appendChild(buildKpiTable(
-    ['업체', '기준 제품', 'P 리드타임(일)', 'C 작업공수(MD)', '종합 개선율'],
-    VIEW_SETS.map((set) => {
-        const [p, c] = SET_KPI[set].items;
-        return [
-            [SET_NAMES[set]],
-            [SET_KPI[set].product],
-            [`${p.before} → ${p.after}`, 'num'],
-            [`${c.before} → ${c.after}`, 'num'],
-            [fmtPct(kpiTotal(set)), 'num kpi-total'],
-        ];
-    })
-));
 overviewFrame.appendChild(kpiOverviewCard);
+
+let kpiShownDate = '';
+function renderKpi() {
+    const dateKey = kpiDateKey();
+    if (dateKey === kpiShownDate) return;
+    kpiShownDate = dateKey;
+    kpiCards.forEach(({ card, set }) => renderKpiCard(card, set, dateKey));
+    renderKpiOverview(kpiOverviewCard, dateKey);
+    placeKpiCards();
+}
+renderKpi();
+setInterval(renderKpi, KPI_DATE_CHECK_MS);
 
 // ---------------------------------------------------------------------
 // 설비 데이터 카드(화면 우상단) — 2×2: 화면마다 해당 업체, 전체 화면: 4개사 비교표. 단축키 V.
