@@ -51,8 +51,8 @@ const VIEW_FIT_MARGIN = 1.3; // 모델이 화면에 꽉 차지 않도록 여유 
 const OVERVIEW_FIT_MARGIN = 1.7; // 전체 화면 — 네 모서리의 토글·표·카드에 끝 설비가 가리지 않게 여유를 더 둠
 const VIEW_DEFAULT_HEIGHT = 6000; // 모델 로드 전 임시 화면 세로 범위(mm)
 
-// 축 이동 범위(기준 위치 대비 오프셋, mm) — DB 좌표 범위 제한과 화면 맞춤(fit)에 공통 사용
-// 교체 모델(BODY/XBODY/YBODY/ZBODY) 치수 기준: X = BODY 폭 안, Y = BODY 길이 안. Z = -100 ~ 200 (지정값)
+// 신호 없을 때 랜덤 이동 범위(기준 위치 대비 오프셋, mm) — 화면 맞춤(fit)에도 사용. 실제 DB 좌표는 제한하지 않음.
+// 보기 편하게 정한 값: X = BODY 폭 안, Y = BODY 길이 안, Z = -100 ~ 200
 const AXIS_MOVE_RANGE = {
     x: [-600, 600],
     y: [-1100, 1450],
@@ -591,23 +591,15 @@ const dbPos = {}; // set -> { target, current }
 const dbOnline = {}; // set -> true(신호 수신 중) / false(신호 없음 → 랜덤 이동)
 const axisSets = {}; // set -> { xMover, yMover, zMover, lastPos, usingRandom, xPart, yPart, zPart, *Base* }
 const dbRows = {}; // set -> 최신 DB 행 (없으면 null)
-const dbRangeWarned = {};
 
-// DB 값 → 모델 이동값(mm). 모델 이동 범위(AXIS_MOVE_RANGE)를 벗어나면 범위 끝에 고정하고 콘솔 경고.
+// DB 값 → 모델 이동값(mm). 실제 좌표를 범위 제한 없이 그대로 사용
+// (AXIS_MOVE_RANGE는 신호 없을 때의 랜덤 이동 범위와 화면 맞춤에만 사용).
 function updateDbTarget(set, data) {
     const t = {};
     for (const axis of ['x', 'y', 'z']) {
         const raw = Number(data[DB_POS_FIELDS[axis]]);
         if (!Number.isFinite(raw)) return false;
-        const mm = raw * DB_POS_TO_MM + DB_POS_OFFSET[axis];
-        const lo = Math.min(...AXIS_MOVE_RANGE[axis]);
-        const hi = Math.max(...AXIS_MOVE_RANGE[axis]);
-        const warnKey = set + axis;
-        if ((mm < lo || mm > hi) && !dbRangeWarned[warnKey]) {
-            dbRangeWarned[warnKey] = true;
-            console.warn(`설비 ${set}(${SET_EQUIPMENT_NO[set]}) ${DB_POS_FIELDS[axis]}=${raw} → ${mm}mm 가 모델 이동 범위(${lo}~${hi}mm)를 벗어나 범위 끝에 고정합니다.`);
-        }
-        t[axis] = Math.min(hi, Math.max(lo, mm));
+        t[axis] = raw * DB_POS_TO_MM + DB_POS_OFFSET[axis];
     }
     if (!dbPos[set]) dbPos[set] = { target: t, current: { ...t } };
     else dbPos[set].target = t;
