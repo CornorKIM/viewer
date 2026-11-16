@@ -95,13 +95,16 @@ export default async function handler(req, res) {
         subject: report.subject,
     };
 
+    const apiKey = process.env.RESEND_API_KEY;
+    const to = String(process.env.KPI_REPORT_TO || '').split(',').map((s) => s.trim()).filter(Boolean);
+
     if (dry) {
-        res.status(200).json({ ...summary, dry: true, text: report.text });
+        // 값은 노출하지 않고 설정 여부만 표시
+        const envReady = { RESEND_API_KEY: Boolean(apiKey), KPI_REPORT_TO_count: to.length, CRON_SECRET: Boolean(secret) };
+        res.status(200).json({ ...summary, dry: true, env_ready: envReady, text: report.text });
         return;
     }
 
-    const apiKey = process.env.RESEND_API_KEY;
-    const to = String(process.env.KPI_REPORT_TO || '').split(',').map((s) => s.trim()).filter(Boolean);
     if (!apiKey || to.length === 0) {
         res.status(500).json({ error: 'missing_env', message: 'RESEND_API_KEY, KPI_REPORT_TO 환경변수가 필요합니다.' });
         return;
