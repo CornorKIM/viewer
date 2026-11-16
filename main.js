@@ -27,7 +27,7 @@ const SET_NAMES = {
     D: '비스트럭처',
 };
 
-// 업체별 핵심성과지표(KPI) — 구축 전·목표·구축 후 기준값. 화면의 구축 후 값은 날짜별로 kpiDailyAfter에서 정함.
+// 업체별 핵심성과지표(KPI) — 구축 전·목표·구축 후 기준값. 화면의 구축 후 값은 kpiCurrentAfter에서 시각별로 정함.
 // 망소특성 개선율 = (구축 전 − 구축 후) / 구축 전 × 100, 종합 = 지표별 개선율 × 가중치 합
 const SET_KPI = {
     A: { product: '원목 테이블', items: [
@@ -261,38 +261,87 @@ if (viewGridEl) viewGridEl.after(overviewFrame);
 // ---------------------------------------------------------------------
 // 핵심성과지표(KPI) 카드 — 2×2: 화면마다 해당 업체, 전체 화면: 4개사 비교표. 단축키 K.
 // ---------------------------------------------------------------------
-// 날짜별 "구축 후" 값 — 날짜·업체·지표로 정해져 같은 날에는 항상 같은 값.
-// 범위: SET_KPI 구축 후 값 ± (목표 − 구축 후) → 항상 목표 이하(달성), 평균은 SET_KPI 구축 후 값. KPI_DAILY_STEP 단위.
-const KPI_DAILY_STEP = 0.05;
-const KPI_DATE_CHECK_MS = 60 * 1000; // 자정이 지나면 다음 날 값으로 갱신
+// "구축 후" 값 진행 — 평일 근무시간(10:00~18:00)에만 바뀜.
+// 10:00에 목표값에서 시작해 60~90분 간격(불규칙)·불규칙한 폭으로 움직여 18:00 전에 SET_KPI 구축 후 값에 도달.
+// 근무시간 외(18:00 이후·10:00 이전·주말)에는 마지막 도달값(SET_KPI 구축 후 값)을 유지.
+// 같은 날짜·업체·지표는 같은 시각과 경로(시각 기준으로 누가 열어도 같은 값).
+const KPI_WORK_START_MIN = 10 * 60;
+const KPI_WORK_END_MIN = 18 * 60;
+const KPI_STEP_GAP_MIN = [60, 90];
+const KPI_VALUE_STEP = 0.05;
+const KPI_REFRESH_MS = 30 * 1000;
 
-function kpiDateKey(d = new Date()) {
+function kpiDateKey(d) {
     const pad = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function hashUnit(str) {
+function seededRandom(str) {
     let h = 2166136261;
     for (let i = 0; i < str.length; i++) {
         h ^= str.charCodeAt(i);
         h = Math.imul(h, 16777619);
     }
-    let t = (h + 0x6d2b79f5) | 0;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    let a = h >>> 0;
+    return () => {
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), a | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
 }
 
-function kpiDailyAfter(set, item, dateKey) {
-    const spread = item.target - item.after;
-    const v = item.after + (hashUnit(`${dateKey}|${set}|${item.code}`) * 2 - 1) * spread;
-    const stepped = Math.round(v / KPI_DAILY_STEP) * KPI_DAILY_STEP;
-    return Math.min(item.target, Math.max(KPI_DAILY_STEP, Number(stepped.toFixed(2))));
+const roundKpi = (v) => Number((Math.round(v / KPI_VALUE_STEP) * KPI_VALUE_STEP).toFixed(2));
+
+// 하루 진행 일정: [{ min: 분(자정 기준), value }] — 10:00 목표값, 마지막 단계 = 구축 후 값.
+// 바뀌는 시각은 업체 단위로 같고(P·C 동시), 폭은 지표마다 다름. 단계마다 표시값이 실제로 바뀌게 보정.
+function kpiDaySchedule(set, item, dateKey) {
+    const timeRand = seededRandom(`${dateKey}|${set}`);
+    const times = [];
+    for (let t = KPI_WORK_START_MIN; ;) {
+        t += Math.round(KPI_STEP_GAP_MIN[0] + (KPI_STEP_GAP_MIN[1] - KPI_STEP_GAP_MIN[0]) * timeRand());
+        if (t > KPI_WORK_END_MIN) break;
+        times.push(t);
+    }
+    const rand = seededRandom(`${dateKey}|${set}|${item.code}`);
+    const between = (lo, hi) => lo + (hi - lo) * rand();
+    let sum = 0;
+    const cumulative = times.map((_, i) => {
+        sum += i < times.length - 1 && i > 0 && rand() < 0.25 ? -between(0.05, 0.2) : between(0.3, 1);
+        return sum;
+    });
+    const total = cumulative[cumulative.length - 1];
+    const span = item.target - item.after;
+    const values = [item.target];
+    times.forEach((_, i) => {
+        if (i === times.length - 1) {
+            values.push(item.after);
+            return;
+        }
+        const prev = values[values.length - 1];
+        const want = roundKpi(item.target - span * Math.min(1, Math.max(0, cumulative[i] / total)));
+        const s = KPI_VALUE_STEP;
+        const candidates = [want, prev - s, prev + s, prev - 2 * s, prev + 2 * s].map(roundKpi);
+        const ok = (v) => v >= item.after && v <= item.target && v !== prev && (i !== times.length - 2 || v !== item.after);
+        values.push(candidates.find(ok) ?? want);
+    });
+    return [KPI_WORK_START_MIN, ...times].map((min, i) => ({ min, value: values[i] }));
+}
+
+function kpiCurrentAfter(set, item, now) {
+    const day = now.getDay();
+    const min = now.getHours() * 60 + now.getMinutes();
+    if (day === 0 || day === 6 || min < KPI_WORK_START_MIN) return item.after;
+    let value = item.after;
+    for (const step of kpiDaySchedule(set, item, kpiDateKey(now))) {
+        if (step.min <= min) value = step.value;
+    }
+    return value;
 }
 
 const kpiImprovement = (item, after) => ((item.before - after) / item.before) * 100;
-const kpiTotal = (set, dateKey) => SET_KPI[set].items.reduce(
-    (sum, item) => sum + kpiImprovement(item, kpiDailyAfter(set, item, dateKey)) * item.weight, 0);
+const kpiTotal = (set, now) => SET_KPI[set].items.reduce(
+    (sum, item) => sum + kpiImprovement(item, kpiCurrentAfter(set, item, now)) * item.weight, 0);
 const fmtPct = (v) => `${v.toFixed(2)}%`;
 const fmtKpiNum = (v) => String(Number(v.toFixed(2)));
 
@@ -316,14 +365,14 @@ function buildKpiTable(headers, rows) {
     return table;
 }
 
-function renderKpiCard(card, set, dateKey) {
+function renderKpiCard(card, set, now) {
     const head = el('div', 'kpi-head');
     head.appendChild(el('span', null, `핵심성과지표 · ${SET_KPI[set].product}`));
-    head.appendChild(el('span', 'kpi-total', `종합 ${fmtPct(kpiTotal(set, dateKey))}`));
+    head.appendChild(el('span', 'kpi-total', `종합 ${fmtPct(kpiTotal(set, now))}`));
     card.replaceChildren(head, buildKpiTable(
         ['지표', '구축 전', '목표', '구축 후', '개선율'],
         SET_KPI[set].items.map((item) => {
-            const after = kpiDailyAfter(set, item, dateKey);
+            const after = kpiCurrentAfter(set, item, now);
             return [
                 [`${item.code} ${item.name}(${item.unit})`],
                 [fmtKpiNum(item.before), 'num'],
@@ -335,7 +384,7 @@ function renderKpiCard(card, set, dateKey) {
     ));
 }
 
-function renderKpiOverview(card, dateKey) {
+function renderKpiOverview(card, now) {
     const head = el('div', 'kpi-head');
     head.appendChild(el('span', null, '핵심성과지표 · 4개사 (구축 전 → 구축 후)'));
     card.replaceChildren(head, buildKpiTable(
@@ -345,9 +394,9 @@ function renderKpiOverview(card, dateKey) {
             return [
                 [SET_NAMES[set]],
                 [SET_KPI[set].product],
-                [`${fmtKpiNum(p.before)} → ${fmtKpiNum(kpiDailyAfter(set, p, dateKey))}`, 'num'],
-                [`${fmtKpiNum(c.before)} → ${fmtKpiNum(kpiDailyAfter(set, c, dateKey))}`, 'num'],
-                [fmtPct(kpiTotal(set, dateKey)), 'num kpi-total'],
+                [`${fmtKpiNum(p.before)} → ${fmtKpiNum(kpiCurrentAfter(set, p, now))}`, 'num'],
+                [`${fmtKpiNum(c.before)} → ${fmtKpiNum(kpiCurrentAfter(set, c, now))}`, 'num'],
+                [fmtPct(kpiTotal(set, now)), 'num kpi-total'],
             ];
         })
     ));
@@ -363,17 +412,18 @@ const kpiOverviewCard = el('div', 'kpi-card');
 kpiOverviewCard.id = 'kpi-overview';
 overviewFrame.appendChild(kpiOverviewCard);
 
-let kpiShownDate = '';
+let kpiShownValues = '';
 function renderKpi() {
-    const dateKey = kpiDateKey();
-    if (dateKey === kpiShownDate) return;
-    kpiShownDate = dateKey;
-    kpiCards.forEach(({ card, set }) => renderKpiCard(card, set, dateKey));
-    renderKpiOverview(kpiOverviewCard, dateKey);
+    const now = new Date();
+    const values = VIEW_SETS.map((set) => SET_KPI[set].items.map((item) => kpiCurrentAfter(set, item, now)).join(',')).join('|');
+    if (values === kpiShownValues) return;
+    kpiShownValues = values;
+    kpiCards.forEach(({ card, set }) => renderKpiCard(card, set, now));
+    renderKpiOverview(kpiOverviewCard, now);
     placeKpiCards();
 }
 renderKpi();
-setInterval(renderKpi, KPI_DATE_CHECK_MS);
+setInterval(renderKpi, KPI_REFRESH_MS);
 
 // ---------------------------------------------------------------------
 // 설비 데이터 카드(화면 우상단) — 2×2: 화면마다 해당 업체, 전체 화면: 4개사 비교표. 단축키 V.
