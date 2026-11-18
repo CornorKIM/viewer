@@ -139,6 +139,12 @@ export function kpiReachMin(set, dateKey) {
     return times[times.length - 1];
 }
 
+// 그날 KPI 메일 발송 기준 시각(분) = 4개사 중 마지막 도달 시각. 근무일이 아니면 null.
+export function kpiSendMin(dateKey) {
+    if (!isKpiWorkday(dateKey)) return null;
+    return Math.max(...Object.keys(SET_KPI).map((set) => kpiReachMin(set, dateKey)));
+}
+
 export function kpiCurrentAfter(set, item, now) {
     const { dateKey, min } = kstParts(now);
     if (!isKpiWorkday(dateKey)) return item.after;

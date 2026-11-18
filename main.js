@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { SET_KPI, kpiCurrentAfter, kpiImprovement, kpiTotal } from './kpi.js';
+import { SET_KPI, kpiCurrentAfter, kpiImprovement, kpiTotal, kpiSendMin, kstParts, kstDate } from './kpi.js';
 
 // =====================================================================
 // 2×2 멀티뷰 — 화면을 4개 구역으로 나누고 각 구역이 설비 1대(모델)를 비춤.
@@ -32,7 +32,7 @@ const VIEW_FIT_MARGIN = 1.3; // 모델이 화면에 꽉 차지 않도록 여유 
 const OVERVIEW_FIT_MARGIN = 1.7; // 전체 화면 — 네 모서리의 토글·표·카드에 끝 설비가 가리지 않게 여유를 더 둠
 const VIEW_DEFAULT_HEIGHT = 6000; // 모델 로드 전 임시 화면 세로 범위(mm)
 
-// 신호 없을 때 랜덤 이동 범위(기준 위치 대비 오프셋, mm) — 화면 맞춤(fit)에도 사용. 실제 DB 좌표는 제한하지 않음.
+// ACTION 임의 이동 범위(기준 위치 대비 오프셋, mm) — 화면 맞춤(fit)에도 사용. 실제 DB 좌표는 제한하지 않음.
 // 보기 편하게 정한 값: X = BODY 폭 안, Y = BODY 길이 안, Z = -100 ~ 200
 const AXIS_MOVE_RANGE = {
     x: [-600, 600],
@@ -486,6 +486,48 @@ document.addEventListener('keydown', (e) => {
     writeToggleState(t.key, t.visible);
 });
 
+// ---------------------------------------------------------------------
+// ACTION 버튼(단축키 R) — 실제 데이터가 없는 설비의 X/Y/Z 축을 임의로 움직임. 누를 때마다 켜기/끄기.
+// 저장하지 않음(새로고침하면 꺼짐 = 기본 정지). 그날 KPI 메일 발송 시각 전에 켰다면 발송 시각에 자동으로 꺼짐.
+// ---------------------------------------------------------------------
+const ACTION_CHECK_MS = 10 * 1000;
+const actionBtn = document.getElementById('toggleAction');
+let actionOn = false;
+let actionStartedAt = 0;
+
+function setAction(on) {
+    actionOn = on;
+    actionStartedAt = on ? Date.now() : 0;
+    if (actionBtn) {
+        actionBtn.classList.toggle('on', on);
+        actionBtn.setAttribute('aria-checked', String(on));
+    }
+}
+
+function todayKpiSendTime() {
+    const { dateKey } = kstParts(new Date());
+    const min = kpiSendMin(dateKey);
+    return min === null ? null : kstDate(dateKey, min).getTime();
+}
+
+function checkActionAutoStop() {
+    if (!actionOn) return;
+    const sendAt = todayKpiSendTime();
+    if (sendAt !== null && actionStartedAt < sendAt && Date.now() >= sendAt) setAction(false);
+}
+
+if (actionBtn) {
+    actionBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setAction(!actionOn);
+        actionBtn.blur();
+    });
+}
+document.addEventListener('keydown', (e) => {
+    if (!e.repeat && e.code === 'KeyR') setAction(!actionOn);
+});
+setInterval(checkActionAutoStop, ACTION_CHECK_MS);
+
 // 오른쪽 위 좌표 HUD
 const coordsEl = document.getElementById('coords');
 
@@ -585,7 +627,13 @@ const SET_EQUIPMENT_NO = {
 };
 // DB 좌표를 모델에 반영할지 여부. false = 신호 없음으로 간주 → 모든 설비 랜덤 이동
 // (현재 들어오는 값은 테스트용 신호기 값이라 반영하지 않음. 실제 신호 연결 후 true로 변경)
-const DB_LINK_ENABLED = false;
+const DB_LINK_ENABLED = true;
+// 마지막 수집 시각이 이보다 오래된 행은 신호 없음으로 봄(예전 테스트 값 등 멈춘 데이터 제외)
+const DB_FRESH_MS = 5 * 60 * 1000;
+function isFreshRow(row) {
+    const t = Date.parse(row.created_at);
+    return Number.isFinite(t) && Date.now() - t <= DB_FRESH_MS;
+}
 const DB_POS_FIELDS = { x: 'pos_x', y: 'pos_y', z: 'pos_z' }; // 기계좌표. 공구 끝 기준이면 tcp_x/tcp_y/tcp_z
 const DB_POS_TO_MM = 0.001; // DB 값 → mm 환산 배율 (DB 255999.0 → 255.999mm)
 const DB_POS_OFFSET = { x: 0, y: 0, z: 0 }; // 기계 원점과 모델 기준 위치 차이 보정(mm)
@@ -593,7 +641,7 @@ const DB_SMOOTHING = 8; // 1초 간격 값 사이를 부드럽게 잇는 정도 
 
 const dbPos = {}; // set -> { target, current }
 const dbOnline = {}; // set -> true(신호 수신 중) / false(신호 없음 → 랜덤 이동)
-const axisSets = {}; // set -> { xMover, yMover, zMover, lastPos, usingRandom, xPart, yPart, zPart, *Base* }
+const axisSets = {}; // set -> { xMover, yMover, zMover, lastPos, mode, xPart, yPart, zPart, *Base* }
 const dbRows = {}; // set -> 최신 DB 행 (없으면 null)
 
 // DB 값 → 모델 이동값(mm). 실제 좌표를 범위 제한 없이 그대로 사용
@@ -675,7 +723,7 @@ async function pollMachine() {
         for (const set of VIEW_SETS) {
             const row = data[SET_EQUIPMENT_NO[set]] || null;
             dbRows[set] = row;
-            setDbLinkStatus(set, DB_LINK_ENABLED && row ? updateDbTarget(set, row) : false);
+            setDbLinkStatus(set, DB_LINK_ENABLED && row && isFreshRow(row) ? updateDbTarget(set, row) : false);
         }
     } catch (err) {
         machinePanelError = '(연결 실패)';
@@ -853,7 +901,7 @@ VIEW_SETS.forEach((set) => {
         yMover: createRandomMover(...AXIS_MOVE_RANGE.y),
         zMover: createRandomMover(...AXIS_MOVE_RANGE.z),
         lastPos: { x: 0, y: 0, z: 0 }, // 마지막으로 화면에 반영한 이동값
-        usingRandom: false, // 현재 랜덤 이동 중인지 (전환 시점 판단용)
+        mode: 'hold', // 'db'(실제 데이터) / 'random'(ACTION) / 'hold'(정지) — 전환 시점 판단용
         bodyPart: null, xPart: null, yPart: null, zPart: null,
         xBaseX: 0, xBaseY: 0, yBaseY: 0, zBaseX: 0, zBaseY: 0, zBaseZ: 0,
     };
@@ -1057,22 +1105,21 @@ function animate() {
 
     for (const set of VIEW_SETS) {
         const e = axisSets[set];
-        let p;
-        if (dbOnline[set]) {
-            // DB 신호 수신 중 — DB 좌표 사용. 랜덤에서 넘어온 직후엔 현재 위치에서 DB 위치로 부드럽게 이동
-            if (e.usingRandom && dbPos[set]) dbPos[set].current = { ...e.lastPos };
-            e.usingRandom = false;
-            p = stepDbPos(set, deltaTime) || e.lastPos;
-        } else {
-            // DB 신호 없음 — 예전처럼 랜덤 이동. 전환 직후엔 현재 위치에서 이어서 움직임
-            if (!e.usingRandom) {
+        // 실제 데이터 수신 중이면 DB 좌표, 아니면 ACTION 켜짐일 때만 임의 이동, 그 외 정지.
+        // 전환 직후엔 현재 위치에서 이어서 움직임(튐 없음)
+        const mode = dbOnline[set] ? 'db' : actionOn ? 'random' : 'hold';
+        if (mode !== e.mode) {
+            if (mode === 'db' && dbPos[set]) dbPos[set].current = { ...e.lastPos };
+            if (mode === 'random') {
                 e.xMover.reset(e.lastPos.x);
                 e.yMover.reset(e.lastPos.y);
                 e.zMover.reset(e.lastPos.z);
-                e.usingRandom = true;
             }
-            p = { x: e.xMover.update(deltaTime), y: e.yMover.update(deltaTime), z: e.zMover.update(deltaTime) };
+            e.mode = mode;
         }
+        let p = e.lastPos;
+        if (mode === 'db') p = stepDbPos(set, deltaTime) || e.lastPos;
+        else if (mode === 'random') p = { x: e.xMover.update(deltaTime), y: e.yMover.update(deltaTime), z: e.zMover.update(deltaTime) };
         e.lastPos = { x: p.x, y: p.y, z: p.z };
         const xDelta = p.x;
         const yDelta = p.y;
