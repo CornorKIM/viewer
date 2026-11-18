@@ -1,6 +1,8 @@
 // Vercel Serverless Function — 핵심성과지표 일일 보고 메일.
-// Vercel Cron(vercel.json)이 매일 00:00 UTC(= 09:00 KST)에 호출 → 그날 4개사 KPI가 구축 후 값에
-// 도달하는 시각을 계산해, 마지막 도달 시각에 메일이 발송되도록 Resend에 예약한다.
+// GitHub Actions(.github/workflows/kpi-report.yml)가 평일 16:00~19:50 KST에 10분마다 호출.
+// 그날 4개사 중 마지막 업체가 구축 후 값에 도달한 시각이 지난 뒤 첫 호출에서 즉시 발송하고,
+// 이후 호출은 같은 날 중복 방지 키(Resend Idempotency-Key)로 다시 보내지 않음.
+// (Resend 예약 발송은 미인증 도메인 onboarding@resend.dev 로는 실패하므로 사용하지 않음)
 // 주말·공휴일(kpi.js KR_HOLIDAYS)은 발송하지 않음.
 //
 // 환경변수(Vercel):
@@ -8,9 +10,9 @@
 // - KPI_REPORT_TO    (필수) 받는 사람. 쉼표로 여러 명
 // - KPI_REPORT_FROM  (선택) 보내는 사람. 기본 'TP_2-3 KPI <onboarding@resend.dev>'
 //                    (onboarding@resend.dev 는 Resend 가입 메일 주소로만 발송 가능)
-// - CRON_SECRET      (선택) 설정하면 Vercel Cron 외의 호출을 막음. 없어도 실제 발송은 오늘 날짜만·하루 1통
+// - CRON_SECRET      (선택) 설정하면 Authorization: Bearer <값> 없는 호출을 막음. 없어도 실제 발송은 오늘 날짜만·하루 1통
 //
-// 수동 확인: GET /api/kpi-report?dry=1[&date=YYYY-MM-DD] → 발송하지 않고 내용·예약 시각만 반환.
+// 수동 확인: GET /api/kpi-report?dry=1[&date=YYYY-MM-DD] → 발송하지 않고 내용·발송 시각만 반환.
 // 테스트 발송: GET /api/kpi-report?test=1 → 오늘 내용을 제목 앞 [테스트]로 즉시 발송(하루 1통).
 
 import {
@@ -20,7 +22,6 @@ import {
 const SET_NAMES = { A: '목공소 봄', B: '이레공방', C: '브랜드스미스', D: '비스트럭처' };
 const SETS = ['A', 'B', 'C', 'D'];
 const DEFAULT_FROM = 'TP_2-3 KPI <onboarding@resend.dev>';
-const MIN_SCHEDULE_LEAD_MS = 60 * 1000; // 이보다 가까우면 예약 없이 즉시 발송
 
 const fmtNum = (v) => String(Number(v.toFixed(2)));
 const fmtPct = (v) => `${v.toFixed(2)}%`;
@@ -77,7 +78,6 @@ export default async function handler(req, res) {
     }
 
     const query = req.query || {};
-    const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(query.date || '')) ? String(query.date) : kstParts(new Date()).dateKey;
     const dry = query.dry === '1';
     const test = !dry && query.test === '1'; // 즉시 발송 테스트(제목 앞 [테스트], 하루 1통)
     // 실제 발송은 오늘(KST)만 — 같은 날 중복 방지 키와 함께 하루 최대 1통으로 제한
@@ -85,6 +85,7 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'date_not_allowed', message: '날짜 지정은 dry=1 에서만 가능합니다.' });
         return;
     }
+    const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(query.date || '')) ? String(query.date) : kstParts(new Date()).dateKey;
 
     if (!isKpiWorkday(dateKey)) {
         res.status(200).json({ date: dateKey, skipped: 'not_a_workday' });
@@ -92,13 +93,12 @@ export default async function handler(req, res) {
     }
 
     const report = buildReport(dateKey);
-    const now = Date.now();
-    const scheduleAt = !test && report.sendAt.getTime() - now > MIN_SCHEDULE_LEAD_MS ? report.sendAt.toISOString() : null;
+    const reached = Date.now() >= report.sendAt.getTime();
     const subject = test ? `[테스트] ${report.subject}` : report.subject;
     const summary = {
         date: dateKey,
         send_at_kst: `${dateKey} ${formatKstMin(kstParts(report.sendAt).min)}`,
-        scheduled_at: scheduleAt,
+        reached,
         reach_kst: Object.fromEntries(report.rows.map((r) => [r.name, formatKstMin(r.reach)])),
         subject,
         ...(test ? { test: true } : {}),
@@ -114,6 +114,11 @@ export default async function handler(req, res) {
         return;
     }
 
+    if (!test && !reached) {
+        res.status(200).json({ ...summary, waiting: true });
+        return;
+    }
+
     if (!apiKey || to.length === 0) {
         res.status(500).json({ error: 'missing_env', message: 'RESEND_API_KEY, KPI_REPORT_TO 환경변수가 필요합니다.' });
         return;
@@ -125,7 +130,8 @@ export default async function handler(req, res) {
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
-                'Idempotency-Key': `tp23-kpi-${test ? 'test' : 'report'}-${dateKey}`,
+                // 본문이 날짜별로 항상 같아 같은 날 반복 호출은 같은 메일로 처리됨(재발송 없음)
+                'Idempotency-Key': `tp23-kpi-${test ? 'test' : 'send'}-${dateKey}`,
             },
             body: JSON.stringify({
                 from: process.env.KPI_REPORT_FROM || DEFAULT_FROM,
@@ -133,15 +139,18 @@ export default async function handler(req, res) {
                 subject,
                 html: report.html,
                 text: report.text,
-                ...(scheduleAt ? { scheduled_at: scheduleAt } : {}),
             }),
         });
         const data = await r.json().catch(() => ({}));
+        if (r.status === 409) {
+            res.status(200).json({ ...summary, already_sent: true, detail: data.name });
+            return;
+        }
         if (!r.ok) {
             res.status(502).json({ ...summary, error: 'send_failed', status: r.status, detail: data });
             return;
         }
-        res.status(200).json({ ...summary, id: data.id });
+        res.status(200).json({ ...summary, sent: true, id: data.id });
     } catch (err) {
         res.status(502).json({ ...summary, error: 'send_failed', message: String(err) });
     }
