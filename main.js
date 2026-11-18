@@ -625,7 +625,7 @@ function stepDbPos(set, dt) {
 function setDbLinkStatus(set, ok) {
     const i = views.findIndex((v) => v.set === set);
     const title = i >= 0 ? viewFrames[i].querySelector('.view-title') : null;
-    if (title) title.textContent = `${SET_NAMES[set]} · ${ok ? 'DB 연동' : 'DB 미수신'}`;
+    if (title) title.textContent = ok ? `${SET_NAMES[set]} · DB 연동` : SET_NAMES[set];
     dbOnline[set] = ok;
 }
 VIEW_SETS.forEach((set) => setDbLinkStatus(set, false));
