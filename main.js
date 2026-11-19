@@ -29,7 +29,6 @@ const SET_NAMES = {
 };
 
 const VIEW_FIT_MARGIN = 1.3; // 모델이 화면에 꽉 차지 않도록 여유 배율
-const OVERVIEW_FIT_MARGIN = 1.7; // 전체 화면 — 네 모서리의 토글·표·카드에 끝 설비가 가리지 않게 여유를 더 둠
 const VIEW_DEFAULT_HEIGHT = 6000; // 모델 로드 전 임시 화면 세로 범위(mm)
 
 // ACTION 임의 이동 범위(기준 위치 대비 오프셋, mm) — 화면 맞춤(fit)에도 사용. 실제 DB 좌표는 제한하지 않음.
@@ -115,41 +114,23 @@ const views = VIEW_SETS.map((set, index) => {
     };
 });
 
-// 전체 화면 — 설비 A~D 전체를 한 화면에 표시. '전체 화면' 토글(단축키 F) ON 시 2×2 대신 사용.
-const OVERVIEW_NAME = '전체';
-const OVERVIEW_DEFAULT_HEIGHT = 14000; // 모델 로드 전 임시 화면 세로 범위(mm)
-const overviewView = (() => {
-    const pos = Object.values(AXIS_STATUS_LABEL_POS);
-    const cx = pos.reduce((sum, p) => sum + p[0], 0) / pos.length;
-    const cy = pos.reduce((sum, p) => sum + p[1], 0) / pos.length;
-    return {
-        no: 0,
-        set: null,
-        isOverview: true,
-        camera: createViewCamera(),
-        target: new THREE.Vector3(cx, cy, 0),
-        azimuth: ORBIT_AZIMUTH_START,
-        elevation: ORBIT_ELEVATION_START,
-        viewHeight: OVERVIEW_DEFAULT_HEIGHT,
-    };
-})();
-const allViews = [...views, overviewView];
+const allViews = views;
 
-let overviewMode = false; // true = 전체 화면 1개, false = 2×2 분할
-let activeView = views[0]; // 키보드 조작 대상 — 화면 클릭 시 변경
-let gridActiveView = views[0]; // 2×2 모드에서 마지막으로 선택한 화면 (전체 화면 해제 시 복귀용)
+// 전체 화면(단축키 F) — 선택한 업체 화면 1개를 창 전체로 확대. false = 2×2 분할
+let maximized = false;
+let activeView = views[0]; // 키보드 조작 대상 — 화면 클릭 시 변경. 전체 화면에서는 확대된 화면
 
 function viewName(view) {
-    return view.isOverview ? OVERVIEW_NAME : SET_NAMES[view.set];
+    return SET_NAMES[view.set];
 }
 
 function visibleViews() {
-    return overviewMode ? [overviewView] : views;
+    return maximized ? [activeView] : views;
 }
 
 // 화면 영역(CSS px, 좌상단 원점)
 function getViewRect(view) {
-    if (view.isOverview) {
+    if (maximized && view === activeView) {
         return { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
     }
     const w = window.innerWidth / 2;
@@ -160,7 +141,7 @@ function getViewRect(view) {
 }
 
 function viewAtPoint(clientX, clientY) {
-    if (overviewMode) return overviewView;
+    if (maximized) return activeView;
     const col = clientX < window.innerWidth / 2 ? 0 : 1;
     const row = clientY < window.innerHeight / 2 ? 0 : 1;
     return views[row * 2 + col];
@@ -229,18 +210,8 @@ const viewFrames = views.map((view) => {
     return frame;
 });
 
-// 전체 화면용 제목 (전체 화면 모드에서만 표시)
-const overviewFrame = document.createElement('div');
-overviewFrame.id = 'overviewFrame';
-overviewFrame.className = 'view-frame hidden';
-const overviewTitle = document.createElement('div');
-overviewTitle.className = 'view-title';
-overviewTitle.textContent = OVERVIEW_NAME;
-overviewFrame.appendChild(overviewTitle);
-if (viewGridEl) viewGridEl.after(overviewFrame);
-
 // ---------------------------------------------------------------------
-// 핵심성과지표(KPI) 카드 — 2×2: 화면마다 해당 업체, 전체 화면: 4개사 비교표. 단축키 K.
+// 핵심성과지표(KPI) 카드 — 화면(업체)마다 좌하단. 단축키 K.
 // ---------------------------------------------------------------------
 // 화면 갱신 확인 주기 — 값이 바뀔 때만 다시 그림
 const KPI_REFRESH_MS = 30 * 1000;
@@ -287,33 +258,12 @@ function renderKpiCard(card, set, now) {
     ));
 }
 
-function renderKpiOverview(card, now) {
-    const head = el('div', 'kpi-head');
-    head.appendChild(el('span', null, '핵심성과지표 · 4개사 (구축 전 → 구축 후)'));
-    card.replaceChildren(head, buildKpiTable(
-        ['업체', '기준 제품', 'P 리드타임(일)', 'C 작업공수(MD)', '종합 개선율'],
-        VIEW_SETS.map((set) => {
-            const [p, c] = SET_KPI[set].items;
-            return [
-                [SET_NAMES[set]],
-                [SET_KPI[set].product],
-                [`${fmtKpiNum(p.before)} → ${fmtKpiNum(kpiCurrentAfter(set, p, now))}`, 'num'],
-                [`${fmtKpiNum(c.before)} → ${fmtKpiNum(kpiCurrentAfter(set, c, now))}`, 'num'],
-                [fmtPct(kpiTotal(set, now)), 'num kpi-total'],
-            ];
-        })
-    ));
-}
-
 const kpiCards = views.map((view, i) => {
     const card = el('div', 'kpi-card');
     card.id = `kpi-${view.set}`;
     viewFrames[i].appendChild(card);
     return { card, set: view.set };
 });
-const kpiOverviewCard = el('div', 'kpi-card');
-kpiOverviewCard.id = 'kpi-overview';
-overviewFrame.appendChild(kpiOverviewCard);
 
 let kpiShownValues = '';
 function renderKpi() {
@@ -322,7 +272,6 @@ function renderKpi() {
     if (values === kpiShownValues) return;
     kpiShownValues = values;
     kpiCards.forEach(({ card, set }) => renderKpiCard(card, set, now));
-    renderKpiOverview(kpiOverviewCard, now);
     placeKpiCards();
 }
 renderKpi();
@@ -340,13 +289,10 @@ views.forEach((view, i) => {
     viewFrames[i].appendChild(card);
     machineCards[view.set] = card;
 });
-const machineOverviewCard = el('div', 'machine-card');
-machineOverviewCard.id = 'machine-overview';
-overviewFrame.appendChild(machineOverviewCard);
 
 // ---------------------------------------------------------------------
 // 모델 앞 실시간 축 이동값 라벨 — Z축 헤드 위(로드 전엔 AXIS_STATUS_LABEL_POS)를 각 화면에 투영해 HTML로 표시.
-// 헤드를 따라 움직임. 2×2: 화면마다 해당 업체 1개, 전체 화면: 4개(업체명 포함). 값 = 세트별 X/Y/Z 이동값(mm).
+// 헤드를 따라 움직임. 화면마다 해당 업체 1개. 값 = 세트별 X/Y/Z 이동값(mm).
 // ---------------------------------------------------------------------
 const COORD_AXES = ['x', 'y', 'z'];
 const coordLabels = []; // { view, set, box, values, anchor }
@@ -364,7 +310,6 @@ function addCoordLabel(view, set, frame, showName) {
     coordLabels.push({ view, set, box, values, anchor: new THREE.Vector3(...AXIS_STATUS_LABEL_POS[set]) });
 }
 views.forEach((view, i) => addCoordLabel(view, view.set, viewFrames[i], false));
-VIEW_SETS.forEach((set) => addCoordLabel(overviewView, set, overviewFrame, true));
 
 const coordProjected = new THREE.Vector3();
 const formatSignedMm = (v) => `${v < 0 ? '-' : '+'}${Math.abs(v).toFixed(3)}`;
@@ -410,12 +355,10 @@ function updateActiveFrame() {
 }
 updateActiveFrame();
 
-// 전체 화면 ↔ 2×2 분할 전환
-function setOverviewMode(on) {
-    overviewMode = on;
-    if (viewGridEl) viewGridEl.classList.toggle('hidden', on);
-    overviewFrame.classList.toggle('hidden', !on);
-    activeView = on ? overviewView : gridActiveView;
+// 전체 화면 ↔ 2×2 분할 전환 — 전체 화면은 선택한(노란 테두리) 업체 화면 1개를 창 전체로 확대
+function setMaximized(on) {
+    maximized = on;
+    if (viewGridEl) viewGridEl.classList.toggle('maximized', on);
     updateActiveFrame();
     placeKpiCards();
 }
@@ -425,11 +368,11 @@ function setOverviewMode(on) {
 // 상태는 브라우저에 저장되어 새로고침 후에도 유지. 단축키 C(좌표), V(데이터), H(조작법), K(KPI).
 // ---------------------------------------------------------------------
 const DISPLAY_TOGGLES = [
-    { key: 'overview', buttonId: 'toggleOverview', targetIds: [], label: '전체 화면', hotkey: 'KeyF', defaultOn: false, onChange: setOverviewMode },
+    { key: 'overview', buttonId: 'toggleOverview', targetIds: [], label: '전체 화면', hotkey: 'KeyF', defaultOn: false, onChange: setMaximized },
     { key: 'coords', buttonId: 'toggleCoords', targetIds: ['coords'], label: '좌표', hotkey: 'KeyC' },
-    { key: 'signals', buttonId: 'toggleSignals', targetIds: [...VIEW_SETS.map((set) => `machine-${set}`), 'machine-overview'], label: '데이터', hotkey: 'KeyV' },
+    { key: 'signals', buttonId: 'toggleSignals', targetIds: VIEW_SETS.map((set) => `machine-${set}`), label: '데이터', hotkey: 'KeyV' },
     { key: 'help', buttonId: 'toggleHelp', targetIds: ['info'], label: '조작법', hotkey: 'KeyH' },
-    { key: 'kpi', buttonId: 'toggleKpi', targetIds: [...VIEW_SETS.map((set) => `kpi-${set}`), 'kpi-overview'], label: 'KPI', hotkey: 'KeyK', onChange: placeKpiCards },
+    { key: 'kpi', buttonId: 'toggleKpi', targetIds: VIEW_SETS.map((set) => `kpi-${set}`), label: 'KPI', hotkey: 'KeyK', onChange: placeKpiCards },
 ];
 const TOGGLE_STORAGE_PREFIX = 'viewer.toggle.';
 
@@ -678,26 +621,8 @@ function setDbLinkStatus(set, ok) {
 }
 VIEW_SETS.forEach((set) => setDbLinkStatus(set, false));
 
-// 설비 데이터 카드 갱신 — 화면별(해당 업체) 카드 + 전체 화면용 4개사 비교표
+// 설비 데이터 카드 갱신 — 화면별(해당 업체) 카드
 let machinePanelError = '';
-function buildMachineOverviewTable() {
-    const table = el('table');
-    const headRow = table.appendChild(el('thead')).appendChild(el('tr'));
-    ['항목', ...VIEW_SETS.map((set) => SET_NAMES[set])].forEach((h) => headRow.appendChild(el('th', null, h)));
-    const body = table.appendChild(el('tbody'));
-    let group = null;
-    for (const f of MACHINE_RAW_FIELDS) {
-        if (f.group !== group) {
-            group = f.group;
-            body.appendChild(el('tr', 'machine-group')).appendChild(el('th', null, group)).colSpan = VIEW_SETS.length + 1;
-        }
-        const tr = body.appendChild(el('tr'));
-        tr.appendChild(el('td', null, f.label));
-        VIEW_SETS.forEach((set) => tr.appendChild(el('td', 'num', dbRows[set] ? formatMachineField(f, dbRows[set][f.key]) : '-')));
-    }
-    return table;
-}
-
 function renderMachinePanel() {
     for (const set of VIEW_SETS) {
         const card = machineCards[set];
@@ -708,9 +633,6 @@ function renderMachinePanel() {
         );
         if (!machinePanelError && row) card.appendChild(buildMachineTable(row));
     }
-    machineOverviewCard.replaceChildren(el('div', 'machine-head', '설비 데이터 · 4개사'));
-    if (machinePanelError) machineOverviewCard.appendChild(el('div', 'machine-sub', machinePanelError));
-    else machineOverviewCard.appendChild(buildMachineOverviewTable());
 }
 
 async function pollMachine() {
@@ -862,7 +784,6 @@ function createRandomMover(min, max) {
 }
 
 // 세트 안에서만 Y→X, X→Z로 이동값이 이어짐(갠트리 구조), 세트끼리는 독립.
-const setBoxes = {}; // set -> 이동 범위 포함 박스 (전체 화면 맞춤용)
 
 // 세트의 X/Y/Z 파트 3개가 모두 로드되면 해당 화면을 모델에 맞춤
 function onAxisPartLoaded(set) {
@@ -885,14 +806,6 @@ function onAxisPartLoaded(set) {
     box.max.z += Math.max(...AXIS_MOVE_RANGE.z);
     box.expandByObject(e.bodyPart); // 고정 몸체(BODY)도 화면 안에 들어오게
     fitViewToBox(view, box);
-
-    // 설비 A~D가 모두 로드되면 전체 화면을 4대 전체에 맞춤
-    setBoxes[set] = box.clone();
-    if (VIEW_SETS.every((s) => setBoxes[s])) {
-        const all = new THREE.Box3();
-        VIEW_SETS.forEach((s) => all.union(setBoxes[s]));
-        fitViewToBox(overviewView, all, OVERVIEW_FIT_MARGIN);
-    }
 }
 
 VIEW_SETS.forEach((set) => {
@@ -965,7 +878,6 @@ renderer.domElement.addEventListener('click', (e) => {
     }
     const view = viewAtPoint(e.clientX, e.clientY);
     activeView = view;
-    if (!overviewMode) gridActiveView = view;
     updateActiveFrame();
     renderMachinePanel();
 
@@ -1049,7 +961,6 @@ renderer.domElement.addEventListener('pointermove', (e) => {
         drag.moved = true;
         // 드래그한 화면을 조작 대상으로 선택
         activeView = drag.view;
-        if (!overviewMode) gridActiveView = drag.view;
         updateActiveFrame();
         renderMachinePanel();
     }

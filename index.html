@@ -220,11 +220,14 @@
         font-size: 13px;
         white-space: nowrap;
       }
-      #overviewFrame {
-        position: fixed;
-        inset: 0;
+      /* 전체 화면(F) — 선택한 업체 화면 1개만 창 전체로 */
+      #viewGrid.maximized .view-frame:not(.active) {
+        display: none;
+      }
+      #viewGrid.maximized .view-frame.active {
+        grid-column: 1 / -1;
+        grid-row: 1 / -1;
         border: none;
-        pointer-events: none;
       }
       .view-frame.active .view-title {
         color: #ffd27a;
@@ -243,9 +246,6 @@
         font-size: 12px;
         line-height: 1.4;
         white-space: nowrap;
-      }
-      #kpi-overview {
-        left: 16px;
       }
       .kpi-head {
         display: flex;
