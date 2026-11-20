@@ -15,8 +15,10 @@
 //       GET /api/sf-log?dry=1&window=1440 → 확인 모드에서만 조회 기간(분) 변경(최대 30일)
 //       GET /api/sf-log?test=1       → 등록 여부와 관계없이 DO6999(테스트, 통계 제외)로 전송해 키·형식 확인
 // 사업관리시스템 결과 코드 AP1002 = 정상 저장, AP1028 = 테스트 확인, AP1029 = 10분 이내 재전송(수신만).
+// 실제로 보낸 건(테스트 포함, 키 없음 오류 포함)은 송수신 이력 tp23.sf_log_history에 저장 — /api/sf-log-history, /sflog.html로 확인.
 
 import { Client } from 'pg';
+import { insertHistory } from './_sf-history.js';
 
 const DB_HOST = '175.193.55.102';
 const PG_CONFIG = {
@@ -117,12 +119,17 @@ export default async function handler(req, res) {
             if (dry) continue;
             if (!key) {
                 item.error = 'missing_key';
-                continue;
+            } else {
+                try {
+                    item.response = await sendLog(fields);
+                } catch (err) {
+                    item.error = `send_failed: ${String(err)}`;
+                }
             }
             try {
-                item.response = await sendLog(fields);
+                await insertHistory(client, { set, equipmentNo, test, fields, response: item.response, error: item.error });
             } catch (err) {
-                item.error = `send_failed: ${String(err)}`;
+                item.history_error = String(err);
             }
         }
         res.setHeader('Cache-Control', 'no-store');

@@ -15,9 +15,11 @@
 // 수동 확인: GET /api/kpi-report?dry=1[&date=YYYY-MM-DD] → 발송하지 않고 내용·발송 시각만 반환.
 // 테스트 발송: GET /api/kpi-report?test=1 → 오늘 내용을 제목 앞 [테스트]로 즉시 발송(하루 1통).
 
+import { Client } from 'pg';
 import {
     SET_KPI, kpiImprovement, kpiReachMin, kstDate, kstParts, formatKstMin, isKpiWorkday,
 } from '../kpi.js';
+import { ensureHistoryTable } from './_sf-history.js';
 
 const SET_NAMES = { A: '목공소 봄', B: '이레공방', C: '브랜드스미스', D: '비스트럭처' };
 const SETS = ['A', 'B', 'C', 'D'];
@@ -25,9 +27,39 @@ const DEFAULT_FROM = 'TP_2-3 KPI <onboarding@resend.dev>';
 
 const fmtNum = (v) => String(Number(v.toFixed(2)));
 const fmtPct = (v) => `${v.toFixed(2)}%`;
+// 그날(KST) 스마트공장 로그 전송 요약(tp23.sf_log_history). DB를 못 읽으면 null → 메일에서 해당 부분 생략
+const LOG_SUMMARY_SQL = `
+SELECT set_code,
+       count(*)::int                                              AS sent,
+       count(*) FILTER (WHERE result_code = 'AP1002')::int        AS ok,
+       count(*) FILTER (WHERE test)::int                          AS tests,
+       (array_agg(result_code ORDER BY sent_at DESC))[1]          AS last_code,
+       to_char(max(sent_at) AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS last_at
+FROM tp23.sf_log_history
+WHERE to_char(sent_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $1
+GROUP BY set_code
+`;
+async function fetchLogSummary(dateKey) {
+    if (!process.env.PG_PASSWORD) return null;
+    const client = new Client({
+        host: '175.193.55.102', port: 5432, database: 'postgres', user: 'postgres',
+        password: process.env.PG_PASSWORD, ssl: false, connectionTimeoutMillis: 5000,
+    });
+    try {
+        await client.connect();
+        await ensureHistoryTable(client);
+        const { rows } = await client.query(LOG_SUMMARY_SQL, [dateKey]);
+        return Object.fromEntries(rows.map((r) => [r.set_code, r]));
+    } catch {
+        return null;
+    } finally {
+        try { await client.end(); } catch { /* 무시 */ }
+    }
+}
+
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function buildReport(dateKey) {
+function buildReport(dateKey, logSummary, historyUrl) {
     const rows = SETS.map((set) => {
         const { product, items } = SET_KPI[set];
         const reach = kpiReachMin(set, dateKey);
@@ -42,6 +74,11 @@ function buildReport(dateKey) {
     const sendMin = Math.max(...rows.map((r) => r.reach));
     const subject = `[TP_2-3] 핵심성과지표 일일 보고 ${dateKey}`;
 
+    const logLine = (set) => {
+        const l = logSummary && logSummary[set];
+        if (!l) return '전송 없음';
+        return `전송 ${l.sent}건, 정상 저장(AP1002) ${l.ok}건${l.tests ? `, 테스트 ${l.tests}건` : ''}, 마지막 ${l.last_code || '-'} (${l.last_at})`;
+    };
     const text = [
         `${subject}`,
         '',
@@ -49,6 +86,12 @@ function buildReport(dateKey) {
             `■ ${r.name} (${r.product}) — 도달 ${formatKstMin(r.reach)}, 종합 개선율 ${fmtPct(r.total)}`,
             ...r.indicators.map((k) => `  - ${k.label}: 구축 전 ${fmtNum(k.before)} / 목표 ${fmtNum(k.target)} / 구축 후 ${fmtNum(k.after)} / 개선율 ${fmtPct(k.rate)}`),
         ]),
+        ...(logSummary ? [
+            '',
+            '■ 스마트공장 로그 전송(오늘, 발송 시점 기준)',
+            ...rows.map((r) => `  - ${r.name}: ${logLine(r.set)}`),
+            `  이력: ${historyUrl}`,
+        ] : []),
     ].join('\n');
 
     const th = 'style="border:1px solid #ccc;padding:4px 8px;background:#f3f3f3;text-align:center"';
@@ -65,6 +108,15 @@ function buildReport(dateKey) {
       ${i === 0 ? `<td ${td} rowspan="${r.indicators.length}"><b>${fmtPct(r.total)}</b></td><td ${td} rowspan="${r.indicators.length}">${formatKstMin(r.reach)}</td>` : ''}
     </tr>`).join('')).join('')}
   </table>
+  ${logSummary ? `<h4 style="margin:14px 0 6px">스마트공장 로그 전송(오늘, 발송 시점 기준)</h4>
+  <table style="border-collapse:collapse">
+    <tr><th ${th}>업체</th><th ${th}>전송</th><th ${th}>정상 저장(AP1002)</th><th ${th}>테스트</th><th ${th}>마지막 결과</th></tr>
+    ${rows.map((r) => {
+        const l = logSummary[r.set];
+        return `<tr><td ${tdl}>${escapeHtml(r.name)}</td><td ${td}>${l ? l.sent : 0}</td><td ${td}>${l ? l.ok : 0}</td><td ${td}>${l ? l.tests : 0}</td><td ${tdl}>${l ? `${escapeHtml(l.last_code || '-')} (${l.last_at})` : '전송 없음'}</td></tr>`;
+    }).join('')}
+  </table>
+  <p style="margin:6px 0 0"><a href="${escapeHtml(historyUrl)}">전송 이력 보기</a></p>` : ''}
 </div>`;
 
     return { subject, text, html, sendAt: kstDate(dateKey, sendMin), rows };
@@ -92,7 +144,8 @@ export default async function handler(req, res) {
         return;
     }
 
-    const report = buildReport(dateKey);
+    const historyUrl = `https://${req.headers.host || 'viewer-five-beta.vercel.app'}/sflog.html`;
+    const report = buildReport(dateKey, await fetchLogSummary(dateKey), historyUrl);
     const reached = Date.now() >= report.sendAt.getTime();
     const subject = test ? `[테스트] ${report.subject}` : report.subject;
     const summary = {
