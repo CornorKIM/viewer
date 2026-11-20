@@ -28,6 +28,8 @@
     td.wrap { white-space: normal; min-width: 180px; }
     .empty { padding: 14px; color: var(--muted); }
     .legend { color: var(--muted); margin-top: 8px; }
+    button.toggle { margin-top: 18px; color: var(--warn); }
+    button.toggle[aria-expanded="true"] .arrow { display: inline-block; transform: rotate(180deg); }
   </style>
 </head>
 <body>
@@ -43,15 +45,17 @@
 
   <div id="alert" class="alert hidden"></div>
 
-  <h2>날짜·업체별 요약</h2>
+  <h2>전송 현황</h2>
   <div class="scroll"><table id="summary"></table></div>
 
-  <h2>전송 이력(최신순, 최대 500건)</h2>
+  <h2>전송 이력</h2>
   <div class="scroll"><table id="rows"></table></div>
 
-  <h2>결과 코드 설명(연동규격서 v1.7)</h2>
-  <p class="legend">결과 색: <span class="ok">정상 저장</span> · <span class="test">테스트</span> · <span class="info">수신만(정상 범위)</span> · <span class="err">오류(조치 필요)</span></p>
-  <div class="scroll"><table id="codes"></table></div>
+  <button id="codesToggle" class="toggle" type="button" aria-expanded="false" aria-controls="codesPanel">결과 코드 설명(연동규격서 v1.7) <span class="arrow">▾</span></button>
+  <div id="codesPanel" class="hidden">
+    <p class="legend">결과 색: <span class="ok">정상 저장</span> · <span class="test">테스트</span> · <span class="info">수신만(정상 범위)</span> · <span class="err">오류(조치 필요)</span></p>
+    <div class="scroll"><table id="codes"></table></div>
+  </div>
 </main>
 <script>
   const $ = (id) => document.getElementById(id);
@@ -87,14 +91,14 @@
         cell(tr, r.errors, r.errors ? 'num err' : 'num'); cell(tr, r.last.code, LEVEL_CLASS[r.last.level]); cell(tr, r.last.meaning, 'wrap'); cell(tr, r.last_at);
       });
 
-      const t = $('rows'); t.replaceChildren(); head(t, ['보낸 시각', '업체', '구분', '사용 구분', '장비', '데이터(Byte)', '결과', '의미', '조치', '수신 시각']);
+      const t = $('rows'); t.replaceChildren(); head(t, ['보낸 시각', '업체', '구분', '사용 구분', '장비', '데이터(Byte)', '결과', '의미', '수신 시각']);
       const tb = t.createTBody();
-      if (!data.rows.length) empty(tb, 10);
+      if (!data.rows.length) empty(tb, 9);
       data.rows.forEach((r) => {
         const tr = tb.insertRow(); if (r.level === 'error') tr.className = 'row-err';
         cell(tr, r.sent_at_kst); cell(tr, r.name); cell(tr, r.test ? '테스트' : '실제', r.test ? 'test' : '');
         cell(tr, r.use_se); cell(tr, r.sys_user); cell(tr, r.data_usgqty.toLocaleString(), 'num');
-        cell(tr, r.code || r.error || '-', LEVEL_CLASS[r.level]); cell(tr, r.meaning, 'wrap'); cell(tr, r.action, 'wrap'); cell(tr, r.recptn_dt);
+        cell(tr, r.code || r.error || '-', LEVEL_CLASS[r.level]); cell(tr, r.meaning, 'wrap'); cell(tr, r.recptn_dt);
       });
 
       const c = $('codes'); c.replaceChildren(); head(c, ['코드', '구분', '의미', '조치']);
@@ -108,6 +112,10 @@
       $('status').textContent = '불러오기 실패: ' + err.message;
     }
   }
+  $('codesToggle').addEventListener('click', () => {
+    const open = $('codesPanel').classList.toggle('hidden') === false;
+    $('codesToggle').setAttribute('aria-expanded', String(open));
+  });
   $('reload').addEventListener('click', load);
   $('days').addEventListener('change', load);
   $('set').addEventListener('change', load);
