@@ -19,7 +19,12 @@
     th, td { padding: 5px 10px; border-bottom: 1px solid var(--line); text-align: left; }
     th { color: var(--muted); font-weight: normal; position: sticky; top: 0; background: #34393e; }
     td.num { text-align: right; font-variant-numeric: tabular-nums; }
-    .ok { color: var(--ok); } .test { color: var(--warn); } .err { color: var(--err); }
+    .ok { color: var(--ok); } .test { color: var(--warn); } .info { color: #9ecbff; } .err { color: var(--err); }
+    tr.row-err td { background: rgba(255,90,90,0.10); }
+    .alert { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: rgba(255,90,90,0.18); border: 1px solid rgba(255,120,120,0.5); color: #ffd6d6; }
+    .alert.good { background: rgba(120,220,120,0.12); border-color: rgba(150,230,150,0.4); color: #d8ffd0; }
+    .hidden { display: none; }
+    td.wrap { white-space: normal; min-width: 180px; }
     .empty { padding: 14px; color: var(--muted); }
     .legend { color: var(--muted); margin-top: 8px; }
   </style>
@@ -27,7 +32,7 @@
 <body>
 <main>
   <h1>스마트공장 로그 전송 이력</h1>
-  <p class="sub">사업관리시스템으로 보낸 로그와 돌아온 결과. AP1002 = 정상 저장, AP1028 = 테스트 확인(미저장), AP1029 = 10분 이내 재전송(미저장).</p>
+  <p class="sub">사업관리시스템으로 보낸 로그와 돌아온 결과. 결과 색: <span class="ok">정상 저장</span> · <span class="test">테스트</span> · <span class="info">수신만(정상 범위)</span> · <span class="err">오류(조치 필요)</span>. 코드 의미는 맨 아래 표 참고.</p>
   <div class="bar">
     <label>기간 <select id="days"><option value="1">오늘</option><option value="7" selected>7일</option><option value="30">30일</option><option value="90">90일</option></select></label>
     <label>업체 <select id="set"><option value="">전체</option><option value="A">목공소 봄</option><option value="B">이레공방</option><option value="C">브랜드스미스</option><option value="D">비스트럭처</option></select></label>
@@ -35,17 +40,24 @@
     <span id="status" class="legend"></span>
   </div>
 
+  <div id="alert" class="alert hidden"></div>
+
   <h2>날짜·업체별 요약</h2>
   <div class="scroll"><table id="summary"></table></div>
 
   <h2>전송 이력(최신순, 최대 500건)</h2>
   <div class="scroll"><table id="rows"></table></div>
+
+  <h2>결과 코드 설명(연동규격서 v1.7)</h2>
+  <div class="scroll"><table id="codes"></table></div>
 </main>
 <script>
   const $ = (id) => document.getElementById(id);
   function cell(tr, text, cls) { const td = document.createElement('td'); td.textContent = text ?? ''; if (cls) td.className = cls; tr.appendChild(td); }
   function head(table, cols) { const tr = table.createTHead().insertRow(); cols.forEach((c) => { const th = document.createElement('th'); th.textContent = c; tr.appendChild(th); }); }
-  const codeClass = (code, err) => err ? 'err' : code === 'AP1002' ? 'ok' : (code === 'AP1028' || code === 'AP1029') ? 'test' : 'err';
+  const LEVEL_CLASS = { ok: 'ok', test: 'test', info: 'info', error: 'err' };
+  const LEVEL_NAME = { ok: '정상 저장', test: '테스트', info: '수신만', error: '오류' };
+  const empty = (body, cols) => { const tr = body.insertRow(); const td = tr.insertCell(); td.colSpan = cols; td.className = 'empty'; td.textContent = '기록 없음'; };
 
   async function load() {
     $('status').textContent = '불러오는 중…';
@@ -56,19 +68,38 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || res.status);
 
-      const s = $('summary'); s.replaceChildren(); head(s, ['날짜', '업체', '전송', '정상 저장(AP1002)', '테스트', '마지막 결과', '마지막 전송']);
-      const sb = s.createTBody();
-      if (!data.summary.length) { const tr = sb.insertRow(); const td = tr.insertCell(); td.colSpan = 7; td.className = 'empty'; td.textContent = '기록 없음'; }
-      data.summary.forEach((r) => { const tr = sb.insertRow(); cell(tr, r.day); cell(tr, r.name); cell(tr, r.sent, 'num'); cell(tr, r.ok, 'num ok'); cell(tr, r.tests, 'num'); cell(tr, r.last_code || '-', codeClass(r.last_code)); cell(tr, r.last_at); });
+      const errors = data.summary.reduce((n, r) => n + r.errors, 0);
+      const alert = $('alert');
+      alert.classList.toggle('hidden', !data.summary.length);
+      alert.classList.toggle('good', errors === 0);
+      alert.textContent = errors
+        ? `오류 ${errors}건 — 아래 빨간 행의 의미와 조치를 확인하세요.`
+        : '선택한 기간에 오류 없음.';
 
-      const t = $('rows'); t.replaceChildren(); head(t, ['보낸 시각', '업체', '구분', '사용 구분', '장비', '데이터(Byte)', '결과', '설명', '수신 시각', '오류']);
+      const s = $('summary'); s.replaceChildren(); head(s, ['날짜', '업체', '전송', '정상 저장(AP1002)', '테스트', '오류', '마지막 결과', '의미', '마지막 전송']);
+      const sb = s.createTBody();
+      if (!data.summary.length) empty(sb, 9);
+      data.summary.forEach((r) => {
+        const tr = sb.insertRow(); if (r.errors) tr.className = 'row-err';
+        cell(tr, r.day); cell(tr, r.name); cell(tr, r.sent, 'num'); cell(tr, r.ok, 'num ok'); cell(tr, r.tests, 'num');
+        cell(tr, r.errors, r.errors ? 'num err' : 'num'); cell(tr, r.last.code, LEVEL_CLASS[r.last.level]); cell(tr, r.last.meaning, 'wrap'); cell(tr, r.last_at);
+      });
+
+      const t = $('rows'); t.replaceChildren(); head(t, ['보낸 시각', '업체', '구분', '사용 구분', '장비', '데이터(Byte)', '결과', '의미', '조치', '수신 시각']);
       const tb = t.createTBody();
-      if (!data.rows.length) { const tr = tb.insertRow(); const td = tr.insertCell(); td.colSpan = 10; td.className = 'empty'; td.textContent = '기록 없음'; }
+      if (!data.rows.length) empty(tb, 10);
       data.rows.forEach((r) => {
-        const tr = tb.insertRow();
+        const tr = tb.insertRow(); if (r.level === 'error') tr.className = 'row-err';
         cell(tr, r.sent_at_kst); cell(tr, r.name); cell(tr, r.test ? '테스트' : '실제', r.test ? 'test' : '');
         cell(tr, r.use_se); cell(tr, r.sys_user); cell(tr, r.data_usgqty.toLocaleString(), 'num');
-        cell(tr, r.result_code || '-', codeClass(r.result_code, r.error)); cell(tr, r.result_msg); cell(tr, r.recptn_dt); cell(tr, r.error, 'err');
+        cell(tr, r.code || r.error || '-', LEVEL_CLASS[r.level]); cell(tr, r.meaning, 'wrap'); cell(tr, r.action, 'wrap'); cell(tr, r.recptn_dt);
+      });
+
+      const c = $('codes'); c.replaceChildren(); head(c, ['코드', '구분', '의미', '조치']);
+      const cb = c.createTBody();
+      data.codes.forEach((r) => {
+        const tr = cb.insertRow();
+        cell(tr, r.code, LEVEL_CLASS[r.level]); cell(tr, LEVEL_NAME[r.level], LEVEL_CLASS[r.level]); cell(tr, r.meaning, 'wrap'); cell(tr, r.action || '-', 'wrap');
       });
       $('status').textContent = `갱신 ${new Date().toLocaleTimeString('ko-KR')}`;
     } catch (err) {

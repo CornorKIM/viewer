@@ -20,6 +20,7 @@ import {
     SET_KPI, kpiImprovement, kpiReachMin, kstDate, kstParts, formatKstMin, isKpiWorkday,
 } from '../kpi.js';
 import { ensureHistoryTable } from './_sf-history.js';
+import { describeResult, SF_ERROR_FILTER_SQL } from './_sf-codes.js';
 
 const SET_NAMES = { A: '목공소 봄', B: '이레공방', C: '브랜드스미스', D: '비스트럭처' };
 const SETS = ['A', 'B', 'C', 'D'];
@@ -33,7 +34,9 @@ SELECT set_code,
        count(*)::int                                              AS sent,
        count(*) FILTER (WHERE result_code = 'AP1002')::int        AS ok,
        count(*) FILTER (WHERE test)::int                          AS tests,
+       count(*) FILTER (WHERE ${SF_ERROR_FILTER_SQL})::int         AS errors,
        (array_agg(result_code ORDER BY sent_at DESC))[1]          AS last_code,
+       (array_agg(error ORDER BY sent_at DESC))[1]                AS last_error,
        to_char(max(sent_at) AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS last_at
 FROM tp23.sf_log_history
 WHERE to_char(sent_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $1
@@ -77,7 +80,8 @@ function buildReport(dateKey, logSummary, historyUrl) {
     const logLine = (set) => {
         const l = logSummary && logSummary[set];
         if (!l) return '전송 없음';
-        return `전송 ${l.sent}건, 정상 저장(AP1002) ${l.ok}건${l.tests ? `, 테스트 ${l.tests}건` : ''}, 마지막 ${l.last_code || '-'} (${l.last_at})`;
+        const last = describeResult(l.last_code, l.last_error);
+        return `전송 ${l.sent}건, 정상 저장(AP1002) ${l.ok}건${l.tests ? `, 테스트 ${l.tests}건` : ''}${l.errors ? `, 오류 ${l.errors}건` : ''}, 마지막 ${last.code} ${last.meaning} (${l.last_at})${last.level === 'error' ? ` → ${last.action}` : ''}`;
     };
     const text = [
         `${subject}`,
@@ -110,10 +114,12 @@ function buildReport(dateKey, logSummary, historyUrl) {
   </table>
   ${logSummary ? `<h4 style="margin:14px 0 6px">스마트공장 로그 전송(오늘, 발송 시점 기준)</h4>
   <table style="border-collapse:collapse">
-    <tr><th ${th}>업체</th><th ${th}>전송</th><th ${th}>정상 저장(AP1002)</th><th ${th}>테스트</th><th ${th}>마지막 결과</th></tr>
+    <tr><th ${th}>업체</th><th ${th}>전송</th><th ${th}>정상 저장(AP1002)</th><th ${th}>테스트</th><th ${th}>오류</th><th ${th}>마지막 결과</th></tr>
     ${rows.map((r) => {
         const l = logSummary[r.set];
-        return `<tr><td ${tdl}>${escapeHtml(r.name)}</td><td ${td}>${l ? l.sent : 0}</td><td ${td}>${l ? l.ok : 0}</td><td ${td}>${l ? l.tests : 0}</td><td ${tdl}>${l ? `${escapeHtml(l.last_code || '-')} (${l.last_at})` : '전송 없음'}</td></tr>`;
+        const last = l ? describeResult(l.last_code, l.last_error) : null;
+        const lastHtml = last ? `${escapeHtml(last.code)} ${escapeHtml(last.meaning)} (${l.last_at})${last.level === 'error' ? `<br><b style="color:#c00">조치: ${escapeHtml(last.action)}</b>` : ''}` : '전송 없음';
+        return `<tr><td ${tdl}>${escapeHtml(r.name)}</td><td ${td}>${l ? l.sent : 0}</td><td ${td}>${l ? l.ok : 0}</td><td ${td}>${l ? l.tests : 0}</td><td ${l && l.errors ? 'style="border:1px solid #ccc;padding:4px 8px;text-align:right;color:#c00;font-weight:bold"' : td}>${l ? l.errors : 0}</td><td ${tdl}>${lastHtml}</td></tr>`;
     }).join('')}
   </table>
   <p style="margin:6px 0 0"><a href="${escapeHtml(historyUrl)}">전송 이력 보기</a></p>` : ''}

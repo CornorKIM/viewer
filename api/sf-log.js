@@ -19,6 +19,7 @@
 
 import { Client } from 'pg';
 import { insertHistory } from './_sf-history.js';
+import { describeResult } from './_sf-codes.js';
 
 const DB_HOST = '175.193.55.102';
 const PG_CONFIG = {
@@ -126,6 +127,7 @@ export default async function handler(req, res) {
                     item.error = `send_failed: ${String(err)}`;
                 }
             }
+            item.result = describeResult(item.response && item.response.code, item.error);
             try {
                 await insertHistory(client, { set, equipmentNo, test, fields, response: item.response, error: item.error });
             } catch (err) {
