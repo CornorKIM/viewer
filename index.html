@@ -190,6 +190,89 @@
         display: none !important;
       }
 
+      /* 업체 로그인 창·결과 알림 */
+      #loginModal {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.45);
+        z-index: 50;
+      }
+      #loginBox {
+        width: 280px;
+        background: #1f2327;
+        color: #ffffff;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 10px;
+        padding: 18px 20px;
+        font-family: sans-serif;
+        font-size: 13px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      }
+      #loginBox h3 {
+        margin: 0 0 10px;
+        font-size: 15px;
+      }
+      #loginBox label {
+        display: block;
+        margin: 10px 0 4px;
+        color: rgba(255,255,255,0.7);
+      }
+      #loginBox input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 7px 9px;
+        border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.25);
+        background: #2b3035;
+        color: #ffffff;
+        font: inherit;
+      }
+      #loginError {
+        min-height: 18px;
+        margin-top: 8px;
+        color: #ff8f8f;
+      }
+      #loginBox .buttons {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      #loginBox button {
+        padding: 6px 12px;
+        border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.25);
+        background: #2b3035;
+        color: #ffffff;
+        font: inherit;
+        cursor: pointer;
+      }
+      #loginBox button.primary {
+        background: #ffd27a;
+        border-color: #ffd27a;
+        color: #1e1e1e;
+      }
+      #authToast {
+        position: fixed;
+        top: 72px;
+        left: 10px;
+        max-width: 420px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        background: rgba(0,0,0,0.75);
+        color: #ffffff;
+        font-family: sans-serif;
+        font-size: 12px;
+        z-index: 20;
+        pointer-events: none;
+      }
+      #authToast.ok { border-left: 3px solid #b9ff9e; }
+      #authToast.test, #authToast.info { border-left: 3px solid #ffd27a; }
+      #authToast.error { border-left: 3px solid #ff8f8f; }
+
       /* 2×2 화면 구분선·제목 */
       #viewGrid {
         position: fixed;
@@ -297,11 +380,34 @@
       <button type="button" class="toggle-row on" role="switch" aria-checked="true" id="toggleHelp" title="단축키 H">조작법<kbd>H</kbd></button>
       <button type="button" class="toggle-row on" role="switch" aria-checked="true" id="toggleKpi" title="단축키 K">KPI<kbd>K</kbd></button>
       <button type="button" class="toggle-row" role="switch" aria-checked="false" id="toggleAction" title="단축키 R">ACTION<kbd>R</kbd></button>
+      <button type="button" class="toggle-row" id="authButton" title="업체 로그인">로그인</button>
     </div>
 
     <div id="viewGrid"></div>
 
     <div id="coords"></div>
+
+    <div id="loginModal" class="hidden">
+      <form id="loginBox" autocomplete="off">
+        <h3>업체 로그인</h3>
+        <label for="loginId">아이디(업체 이름)</label>
+        <input id="loginId" list="loginIdList" required>
+        <datalist id="loginIdList">
+          <option value="목공소 봄"></option>
+          <option value="이레공방"></option>
+          <option value="브랜드스미스"></option>
+          <option value="비스트럭처"></option>
+        </datalist>
+        <label for="loginPw">비밀번호</label>
+        <input id="loginPw" type="password" inputmode="numeric" required>
+        <div id="loginError"></div>
+        <div class="buttons">
+          <button type="button" id="loginCancel">취소</button>
+          <button type="submit" class="primary" id="loginSubmit">로그인</button>
+        </div>
+      </form>
+    </div>
+    <div id="authToast" class="hidden"></div>
 
     <script type="module" src="/main.js"></script>
   </body>

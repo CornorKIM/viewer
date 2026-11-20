@@ -20,25 +20,9 @@
 import { Client } from 'pg';
 import { insertHistory } from './_sf-history.js';
 import { describeResult } from './_sf-codes.js';
+import { DB_HOST, PG_CONFIG, USE_SE, SET_EQUIPMENT_NO, sfKey, kstLogDt, sendSfLog } from './_sf-send.js';
 
-const DB_HOST = '175.193.55.102';
-const PG_CONFIG = {
-    host: DB_HOST,
-    port: 5432,
-    database: 'postgres',
-    user: 'postgres',
-    password: process.env.PG_PASSWORD,
-    ssl: false,
-    connectionTimeoutMillis: 5000,
-};
-
-const SF_LOG_URL = 'https://log.smart-factory.kr/apisvc/sendLogData.json';
 const LOG_WINDOW_MIN = 10;
-const USE_SE_REGISTER = 'DO6004'; // 데이터 등록
-const USE_SE_TEST = 'DO6999'; // 테스트 정보(통계 제외)
-
-// 설비 코드 → DB EQUIPMENT_NO (main.js SET_EQUIPMENT_NO와 같은 값). 로그의 시스템 사용자(sysUser)로도 사용.
-const SET_EQUIPMENT_NO = { A: '24424', B: '42504', C: '02895', D: '75980' };
 
 const REGISTERED_QUERY = `
 SELECT count(*)::int AS rows,
@@ -48,27 +32,6 @@ FROM syntec_cnc.raw_data
 WHERE equipment_no::text = $1
   AND collected_at > now() - make_interval(mins => $2)
 `;
-
-const pad = (n, w = 2) => String(n).padStart(w, '0');
-// 한국 시간 "YYYY-MM-DD HH:MI:SS.SSS"
-function kstLogDt(date = new Date()) {
-    const t = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-    return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())} `
-        + `${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())}:${pad(t.getUTCSeconds())}.${pad(t.getUTCMilliseconds(), 3)}`;
-}
-
-async function sendLog(fields) {
-    const r = await fetch(SF_LOG_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-        body: new URLSearchParams(fields).toString(),
-    });
-    const text = await r.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 500) }; }
-    const result = data.result || data;
-    return { http: r.status, code: result.recptnRsltCd, message: result.recptnRslt, detail: result.recptnRsltDtl, at: result.recptnDt };
-}
 
 export default async function handler(req, res) {
     const secret = process.env.CRON_SECRET;
@@ -99,7 +62,7 @@ export default async function handler(req, res) {
             const equipmentNo = SET_EQUIPMENT_NO[set];
             const { rows } = await client.query(REGISTERED_QUERY, [equipmentNo, windowMin]);
             const reg = rows[0];
-            const key = process.env[`SF_LOG_KEY_${set}`];
+            const key = sfKey(set);
             const item = { equipment_no: equipmentNo, registered_rows: reg.rows, registered_bytes: Number(reg.bytes), last_at: reg.last_at, key_set: Boolean(key) };
             out.results[set] = item;
 
@@ -111,7 +74,7 @@ export default async function handler(req, res) {
             const fields = {
                 crtfcKey: key || '',
                 logDt: kstLogDt(),
-                useSe: test ? USE_SE_TEST : USE_SE_REGISTER,
+                useSe: test ? USE_SE.test : USE_SE.register,
                 sysUser: equipmentNo,
                 conectIp: process.env[`SF_LOG_IP_${set}`] || process.env.SF_LOG_DEFAULT_IP || DB_HOST,
                 dataUsgqty: String(Number(reg.bytes)),
@@ -122,7 +85,7 @@ export default async function handler(req, res) {
                 item.error = 'missing_key';
             } else {
                 try {
-                    item.response = await sendLog(fields);
+                    item.response = await sendSfLog(fields);
                 } catch (err) {
                     item.error = `send_failed: ${String(err)}`;
                 }

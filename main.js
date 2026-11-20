@@ -2,6 +2,15 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { SET_KPI, kpiCurrentAfter, kpiImprovement, kpiTotal, kpiSendMin, kstParts, kstDate } from './kpi.js';
 
+// 입력창(로그인 등)에 타이핑할 때는 화면 단축키·이동 키가 동작하지 않게 막음(입력 자체는 그대로 됨)
+function guardTyping(e) {
+    if (!(e.target instanceof HTMLElement) || !e.target.closest('input, textarea, select')) return;
+    if (e.type === 'keydown' && e.key === 'Escape') document.getElementById('loginModal')?.classList.add('hidden');
+    e.stopPropagation();
+}
+window.addEventListener('keydown', guardTyping, true);
+window.addEventListener('keyup', guardTyping, true);
+
 // =====================================================================
 // 2×2 멀티뷰 — 화면을 4개 구역으로 나누고 각 구역이 설비 1대(모델)를 비춤.
 //   1번 화면(좌상) ↔ 설비 A(목공소 봄)    2번 화면(우상) ↔ 설비 B(이레공방)
@@ -1070,3 +1079,126 @@ function animate() {
     updateCoordLabels();
 }
 renderer.setAnimationLoop(animate);
+
+// ---------------------------------------------------------------------
+// 업체 로그인·로그아웃 — 아이디 = 업체 이름, 비밀번호 = 장비 번호. 서버(/api/sf-auth)가 확인하고
+// 스마트공장 로그(DO6001 로그인 / DO6002 로그아웃)를 그 업체 인증키로 1건 전송.
+// 로그인 상태는 브라우저 탭을 닫기 전까지 유지(sessionStorage). 주소에 ?sftest=1 이면 테스트 코드(DO6999)로 전송.
+// ---------------------------------------------------------------------
+const AUTH_STORAGE_KEY = 'viewer.session';
+const AUTH_TOAST_MS = 6000;
+const SF_TEST = new URLSearchParams(window.location.search).get('sftest') === '1';
+const authButton = document.getElementById('authButton');
+const loginModal = document.getElementById('loginModal');
+const loginBox = document.getElementById('loginBox');
+const loginId = document.getElementById('loginId');
+const loginPw = document.getElementById('loginPw');
+const loginError = document.getElementById('loginError');
+const loginSubmit = document.getElementById('loginSubmit');
+const authToast = document.getElementById('authToast');
+let session = null; // { token, set, id }
+let toastTimer = 0;
+
+function readSession() {
+    try { return JSON.parse(sessionStorage.getItem(AUTH_STORAGE_KEY)); } catch { return null; }
+}
+function writeSession(s) {
+    try {
+        if (s) sessionStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(s));
+        else sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    } catch { /* 저장 불가 시 현재 화면에서만 유지 */ }
+}
+
+function renderAuth() {
+    if (!authButton) return;
+    authButton.textContent = session ? `${session.id} · 로그아웃` : '로그인';
+    authButton.classList.toggle('on', Boolean(session));
+}
+
+function showToast(text, level) {
+    if (!authToast) return;
+    authToast.textContent = text;
+    authToast.className = level || '';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => authToast.classList.add('hidden'), AUTH_TOAST_MS);
+}
+
+function selectSet(set) {
+    const view = views.find((v) => v.set === set);
+    if (!view) return;
+    activeView = view;
+    updateActiveFrame();
+    renderMachinePanel();
+}
+
+async function callAuth(payload) {
+    const res = await fetch('/api/sf-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, test: SF_TEST }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok && data.ok, data };
+}
+
+const logText = (log) => (log ? `${log.code} ${log.meaning}` : '로그 결과 없음');
+
+function openLogin() {
+    loginError.textContent = '';
+    loginId.value = '';
+    loginPw.value = '';
+    loginModal.classList.remove('hidden');
+    loginId.focus();
+}
+
+if (loginBox) {
+    loginBox.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        loginSubmit.disabled = true;
+        loginError.textContent = '';
+        try {
+            const { ok, data } = await callAuth({ action: 'login', id: loginId.value, password: loginPw.value });
+            if (!ok) {
+                loginError.textContent = data.message || '로그인에 실패했습니다.';
+                return;
+            }
+            session = { token: data.token, set: data.set, id: data.id };
+            writeSession(session);
+            loginModal.classList.add('hidden');
+            renderAuth();
+            selectSet(data.set);
+            showToast(`${data.id} 로그인 — ${logText(data.log)}`, data.log && data.log.level);
+        } catch {
+            loginError.textContent = '서버에 연결할 수 없습니다.';
+        } finally {
+            loginSubmit.disabled = false;
+        }
+    });
+    document.getElementById('loginCancel').addEventListener('click', () => loginModal.classList.add('hidden'));
+}
+
+async function logout() {
+    const current = session;
+    session = null;
+    writeSession(null);
+    renderAuth();
+    try {
+        const { ok, data } = await callAuth({ action: 'logout', token: current.token });
+        showToast(ok ? `${data.id} 로그아웃 — ${logText(data.log)}` : `로그아웃 — ${data.message || '세션 만료'}`, ok && data.log ? data.log.level : 'error');
+    } catch {
+        showToast('로그아웃 — 서버에 연결할 수 없습니다.', 'error');
+    }
+}
+
+if (authButton) {
+    authButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        authButton.blur();
+        if (session) logout();
+        else openLogin();
+    });
+}
+
+session = readSession();
+renderAuth();
+if (session) selectSet(session.set);

@@ -16,9 +16,10 @@
     h2 { font-size: 14px; margin: 18px 0 6px; color: var(--warn); font-weight: normal; }
     .scroll { overflow-x: auto; background: var(--panel); border-radius: 8px; }
     table { border-collapse: collapse; width: 100%; white-space: nowrap; }
-    th, td { padding: 5px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+    th, td { padding: 5px 10px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); text-align: center; }
+    th:last-child, td:last-child { border-right: none; }
     th { color: var(--muted); font-weight: normal; position: sticky; top: 0; background: #34393e; }
-    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.num { font-variant-numeric: tabular-nums; }
     .ok { color: var(--ok); } .test { color: var(--warn); } .info { color: #9ecbff; } .err { color: var(--err); }
     tr.row-err td { background: rgba(255,90,90,0.10); }
     .alert { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: rgba(255,90,90,0.18); border: 1px solid rgba(255,120,120,0.5); color: #ffd6d6; }
@@ -32,7 +33,7 @@
 <body>
 <main>
   <h1>스마트공장 로그 전송 이력</h1>
-  <p class="sub">사업관리시스템으로 보낸 로그와 돌아온 결과. 결과 색: <span class="ok">정상 저장</span> · <span class="test">테스트</span> · <span class="info">수신만(정상 범위)</span> · <span class="err">오류(조치 필요)</span>. 코드 의미는 맨 아래 표 참고.</p>
+  <p class="sub">스마트공장 사업관리시스템 API 연동</p>
   <div class="bar">
     <label>기간 <select id="days"><option value="1">오늘</option><option value="7" selected>7일</option><option value="30">30일</option><option value="90">90일</option></select></label>
     <label>업체 <select id="set"><option value="">전체</option><option value="A">목공소 봄</option><option value="B">이레공방</option><option value="C">브랜드스미스</option><option value="D">비스트럭처</option></select></label>
@@ -49,6 +50,7 @@
   <div class="scroll"><table id="rows"></table></div>
 
   <h2>결과 코드 설명(연동규격서 v1.7)</h2>
+  <p class="legend">결과 색: <span class="ok">정상 저장</span> · <span class="test">테스트</span> · <span class="info">수신만(정상 범위)</span> · <span class="err">오류(조치 필요)</span></p>
   <div class="scroll"><table id="codes"></table></div>
 </main>
 <script>
