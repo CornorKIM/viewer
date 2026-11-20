@@ -1,5 +1,6 @@
 // Vercel Serverless Function — 스마트공장 로그 송수신 이력 조회(tp23.sf_log_history).
 // GET /api/sf-log-history?days=7[&set=A] → { summary: 날짜·업체별 요약, rows: 최근 이력(최대 500건, 최신순) }
+// 접속 IP는 DB에만 저장하고 응답·화면에는 내보내지 않음.
 // 화면: /sflog.html
 
 import { Client } from 'pg';
@@ -18,7 +19,7 @@ const PG_CONFIG = {
 const ROWS_SQL = `
 SELECT id,
        to_char(sent_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI:SS') AS sent_at_kst,
-       set_code, equipment_no, test, use_se, log_dt, sys_user, conect_ip, data_usgqty,
+       set_code, equipment_no, test, use_se, log_dt, sys_user, data_usgqty,
        http_status, result_code, result_msg, result_detail, recptn_dt, error
 FROM tp23.sf_log_history
 WHERE sent_at >= now() - make_interval(days => $1)

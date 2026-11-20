@@ -61,13 +61,13 @@
       if (!data.summary.length) { const tr = sb.insertRow(); const td = tr.insertCell(); td.colSpan = 7; td.className = 'empty'; td.textContent = '기록 없음'; }
       data.summary.forEach((r) => { const tr = sb.insertRow(); cell(tr, r.day); cell(tr, r.name); cell(tr, r.sent, 'num'); cell(tr, r.ok, 'num ok'); cell(tr, r.tests, 'num'); cell(tr, r.last_code || '-', codeClass(r.last_code)); cell(tr, r.last_at); });
 
-      const t = $('rows'); t.replaceChildren(); head(t, ['보낸 시각', '업체', '구분', '사용 구분', '장비', 'IP', '데이터(Byte)', '결과', '설명', '수신 시각', '오류']);
+      const t = $('rows'); t.replaceChildren(); head(t, ['보낸 시각', '업체', '구분', '사용 구분', '장비', '데이터(Byte)', '결과', '설명', '수신 시각', '오류']);
       const tb = t.createTBody();
-      if (!data.rows.length) { const tr = tb.insertRow(); const td = tr.insertCell(); td.colSpan = 11; td.className = 'empty'; td.textContent = '기록 없음'; }
+      if (!data.rows.length) { const tr = tb.insertRow(); const td = tr.insertCell(); td.colSpan = 10; td.className = 'empty'; td.textContent = '기록 없음'; }
       data.rows.forEach((r) => {
         const tr = tb.insertRow();
         cell(tr, r.sent_at_kst); cell(tr, r.name); cell(tr, r.test ? '테스트' : '실제', r.test ? 'test' : '');
-        cell(tr, r.use_se); cell(tr, r.sys_user); cell(tr, r.conect_ip); cell(tr, r.data_usgqty.toLocaleString(), 'num');
+        cell(tr, r.use_se); cell(tr, r.sys_user); cell(tr, r.data_usgqty.toLocaleString(), 'num');
         cell(tr, r.result_code || '-', codeClass(r.result_code, r.error)); cell(tr, r.result_msg); cell(tr, r.recptn_dt); cell(tr, r.error, 'err');
       });
       $('status').textContent = `갱신 ${new Date().toLocaleTimeString('ko-KR')}`;
