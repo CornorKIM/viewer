@@ -1,0 +1,19 @@
+name: Smart factory log
+
+# 10분마다 /api/sf-log 호출 → 최근 10분 동안 설비 데이터가 실제로 등록된 업체만
+# 스마트공장 사업관리시스템에 DO6004(데이터 등록) 로그 전송.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call smart factory log API
+        run: |
+          code=$(curl -s -o body.json -w '%{http_code}' --max-time 60 "https://viewer-five-beta.vercel.app/api/sf-log")
+          cat body.json; echo
+          test "$code" -lt 400
