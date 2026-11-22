@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>유형1 로그 연동</title>
+  <style>
+    :root { --bg: #2e3236; --panel: rgba(0,0,0,0.35); --fg: #f2f2f2; --muted: rgba(255,255,255,0.6); --line: rgba(255,255,255,0.15); --ok: #b9ff9e; --warn: #ffd27a; --err: #ff8f8f; --info: #9ecbff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 sans-serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 16px; }
+    h1 { font-size: 18px; margin: 0 0 2px; }
+    p.sub { margin: 0 0 14px; color: var(--muted); }
+    h2 { font-size: 14px; margin: 18px 0 6px; color: var(--warn); font-weight: normal; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+    label { display: block; margin: 0 0 10px; color: var(--muted); }
+    input { display: block; width: 100%; margin-top: 4px; padding: 9px 10px; border-radius: 6px; border: 1px solid var(--line); background: rgba(0,0,0,0.3); color: var(--fg); font: inherit; }
+    button { background: rgba(255,255,255,0.08); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 14px; font: inherit; cursor: pointer; }
+    button.primary { background: rgba(120,200,255,0.18); border-color: rgba(150,210,255,0.5); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+    .muted { color: var(--muted); }
+    .ok { color: var(--ok); } .test { color: var(--warn); } .info { color: var(--info); } .err { color: var(--err); }
+    .banner { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: rgba(255,210,122,0.15); border: 1px solid rgba(255,210,122,0.5); color: #ffe7b8; }
+    .hidden { display: none; }
+    .scroll { overflow-x: auto; background: var(--panel); border-radius: 8px; }
+    table { border-collapse: collapse; width: 100%; white-space: nowrap; font-size: 13px; }
+    th, td { padding: 5px 10px; border-bottom: 1px solid var(--line); text-align: center; }
+    th { color: var(--muted); font-weight: normal; background: #34393e; }
+    .empty { padding: 14px; color: var(--muted); }
+    .big { font-size: 16px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>경기TP 스마트공장 유형1</h1>
+  <p class="sub">(주)CDR시스템 · 스마트공장 사업관리시스템 로그 연동</p>
+
+  <div id="testBanner" class="banner hidden">테스트 모드(?sftest=1): 로그인·로그아웃이 DO6999(통계 제외)로 전송됩니다.</div>
+
+  <section id="loginCard" class="card">
+    <form id="loginForm" autocomplete="on">
+      <label>아이디(업체명)<input id="loginId" name="username" placeholder="(주)CDR시스템" autocomplete="username" required></label>
+      <label>비밀번호<input id="loginPw" name="password" type="password" autocomplete="current-password" required></label>
+      <div class="row">
+        <button id="loginBtn" class="primary" type="submit">로그인</button>
+        <span id="loginMsg" class="muted"></span>
+      </div>
+    </form>
+  </section>
+
+  <section id="sessionCard" class="card hidden">
+    <div class="row">
+      <div>
+        <div class="big"><span id="sessName"></span> 로그인 중</div>
+        <div class="muted">로그인 <span id="sessAt"></span> · <span id="sessMode"></span></div>
+      </div>
+      <button id="logoutBtn" type="button">로그아웃</button>
+    </div>
+    <div id="lastLog" class="muted" style="margin-top:8px"></div>
+  </section>
+
+  <section id="sensorCard" class="card hidden">
+    <div class="row">
+      <div>센서 데이터(최근 10분)</div>
+      <button id="sensorReload" type="button">새로고침</button>
+    </div>
+    <div id="sensorInfo" class="muted" style="margin-top:6px">확인 중…</div>
+  </section>
+
+  <h2>전송 이력(7일)</h2>
+  <div class="row" style="margin-bottom:6px"><span class="muted">센서 = 데이터 등록(DO6004), 10분마다 데이터가 있을 때만</span><button id="histReload" type="button">새로고침</button></div>
+  <div class="scroll"><table id="hist"></table></div>
+</main>
+<script>
+const SF_TEST = new URLSearchParams(location.search).get('sftest') === '1';
+const KEY = 'tp1-auth';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const LEVEL_CLASS = { ok: 'ok', test: 'test', info: 'info', error: 'err' };
+const SOURCE_NAME = { login: '로그인', logout: '로그아웃', sensor: '센서' };
+
+function loadSession() { try { return JSON.parse(sessionStorage.getItem(KEY) || 'null'); } catch { return null; } }
+function saveSession(s) { try { s ? sessionStorage.setItem(KEY, JSON.stringify(s)) : sessionStorage.removeItem(KEY); } catch { /* 저장 불가 환경 */ } }
+
+function logText(log) {
+  if (!log) return '';
+  const cls = LEVEL_CLASS[log.level] || 'muted';
+  return `사업관리시스템 ${esc(log.use_se)} → <span class="${cls}">${esc(log.code)} ${esc(log.meaning)}</span>${log.action ? ` · ${esc(log.action)}` : ''}`;
+}
+
+function render() {
+  const s = loadSession();
+  $('testBanner').classList.toggle('hidden', !SF_TEST && !(s && s.test));
+  $('loginCard').classList.toggle('hidden', Boolean(s));
+  $('sessionCard').classList.toggle('hidden', !s);
+  $('sensorCard').classList.toggle('hidden', !s);
+  if (s) {
+    $('sessName').textContent = s.name;
+    $('sessAt').textContent = s.at;
+    $('sessMode').textContent = s.test ? '테스트 모드(로그아웃도 테스트로 전송)' : '실제 전송';
+    $('lastLog').innerHTML = logText(s.log);
+    loadSensor();
+  }
+}
+
+async function post(body) {
+  const r = await fetch('/api/tp1-auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  return { ok: r.ok, data };
+}
+
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('loginBtn').disabled = true;
+  $('loginMsg').textContent = '확인 중…';
+  try {
+    const { ok, data } = await post({ action: 'login', id: $('loginId').value, password: $('loginPw').value, test: SF_TEST });
+    if (!ok || !data.ok) { $('loginMsg').textContent = data.message || '로그인 실패'; return; }
+    const at = new Date().toLocaleString('ko-KR', { hour12: false });
+    saveSession({ token: data.token, name: data.name, test: SF_TEST, at, log: data.log });
+    $('loginPw').value = '';
+    $('loginMsg').textContent = '';
+    render();
+    loadHistory();
+  } catch (err) {
+    $('loginMsg').textContent = '서버 연결 실패';
+  } finally {
+    $('loginBtn').disabled = false;
+  }
+});
+
+$('logoutBtn').addEventListener('click', async () => {
+  const s = loadSession();
+  if (!s) return render();
+  $('logoutBtn').disabled = true;
+  try {
+    // 로그인했을 때의 모드(실제/테스트)로 로그아웃 → 테스트 로그인 후 실제 DO6002가 나가지 않음
+    const { data } = await post({ action: 'logout', token: s.token, test: Boolean(s.test) });
+    saveSession(null);
+    render();
+    $('loginMsg').innerHTML = data && data.log ? `로그아웃 · ${logText(data.log)}` : '로그아웃(세션 만료)';
+    loadHistory();
+  } catch {
+    alertless('서버 연결 실패');
+  } finally {
+    $('logoutBtn').disabled = false;
+  }
+});
+function alertless(msg) { $('lastLog').textContent = msg; }
+
+async function loadSensor() {
+  $('sensorInfo').textContent = '확인 중…';
+  try {
+    const r = await fetch('/api/tp1-sf-log?dry=1', { cache: 'no-store' });
+    const data = await r.json();
+    const s = loadSession();
+    const item = data.results && (s ? Object.values(data.results).find((x) => x.name === s.name) : null);
+    if (!item) { $('sensorInfo').textContent = '센서 정보 없음'; return; }
+    if (item.error) { $('sensorInfo').innerHTML = `<span class="err">${esc(item.error)}</span>`; return; }
+    const last = item.last_at ? new Date(item.last_at).toLocaleTimeString('ko-KR', { hour12: false }) : '-';
+    $('sensorInfo').innerHTML = item.rows > 0
+      ? `<span class="ok">${item.rows.toLocaleString()}건 · ${item.bytes.toLocaleString()}B</span> · 마지막 수신 ${esc(last)} · 다음 정기 전송 때 데이터 등록 대상`
+      : '최근 10분 데이터 없음 → 데이터 등록 로그를 보내지 않음';
+  } catch {
+    $('sensorInfo').textContent = '센서 확인 실패';
+  }
+}
+
+async function loadHistory() {
+  const t = $('hist');
+  try {
+    const r = await fetch('/api/tp1-sf-log-history?days=7', { cache: 'no-store' });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.message || data.error);
+    if (!data.rows.length) { t.innerHTML = '<tr><td class="empty">이력이 없습니다.</td></tr>'; return; }
+    t.innerHTML = '<tr><th>시각</th><th>구분</th><th>코드</th><th>결과</th><th>데이터량</th></tr>'
+      + data.rows.map((x) => `<tr><td>${esc(x.sent_at_kst)}</td><td>${esc(SOURCE_NAME[x.source] || x.source)}${x.test ? ' <span class="test">테스트</span>' : ''}</td>`
+        + `<td>${esc(x.use_se)}</td><td class="${LEVEL_CLASS[x.level] || ''}">${esc(x.code)} ${esc(x.meaning)}</td><td>${Number(x.data_usgqty).toLocaleString()}</td></tr>`).join('');
+  } catch (err) {
+    t.innerHTML = `<tr><td class="empty">이력을 불러오지 못했습니다: ${esc(err.message || err)}</td></tr>`;
+  }
+}
+
+$('sensorReload').addEventListener('click', loadSensor);
+$('histReload').addEventListener('click', loadHistory);
+setInterval(() => { if (loadSession()) loadSensor(); }, 60000);
+render();
+loadHistory();
+</script>
+</body>
+</html>
