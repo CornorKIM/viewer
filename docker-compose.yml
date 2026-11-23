@@ -15,9 +15,13 @@ services:
   # Business-day auto log sending + 23:00 status mail (docs/spec/sf-daily). Same image as the viewer.
   # Stays idle until SF_DAILY_ENABLED=true in .env. No ports: it only makes outbound calls
   # (log API, holiday calendar, SMTP, the history PostgreSQL) and talks to its own DB.
+  # Image: sf-daily reuses the image the viewer service builds and has no build of its own, so
+  # there is exactly one build (the viewer's) and building never makes a second image under the
+  # same tag. Rebuild with `docker compose build viewer` (or `up -d --build`); both services then
+  # run the same code once recreated. pull_policy never: the tag is local, never pulled.
   sf-daily:
-    build: .
     image: factory-3d-viewer:latest
+    pull_policy: never
     container_name: sf-daily
     command: ["node", "sf-daily/main.js"]
     restart: unless-stopped
