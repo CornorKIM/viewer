@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { assertDateString } from './kst.js';
 import { COMPANIES, STEPS } from './companies.js';
 import { normalSaveCounts } from './history.js';
-import { inDedicatedTx, LOCK } from './db.js';
+import { dedicatedClient, dedicatedQuery, LOCK } from './db.js';
 import { sendMail } from './smtp.js';
 
 export const DEFAULT_REPORT_LINK = 'https://twin.smartline.kr/sflog.html';
@@ -103,36 +103,82 @@ function mimeMessage({ from, to, subject, html, text }) {
 }
 
 const failed = (err, missingLogin = []) => ({ outcome: 'failed', missingLogin, error: String(err?.message ?? err) || '실패' });
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const RECORD_RETRY_MS = [0, 1000, 3000, 10_000];
+
+/** After DATA got 250 the mail is out: keep trying to write the "sent" record so it is never sent twice. */
+async function recordSent(date) {
+    let last;
+    for (const wait of RECORD_RETRY_MS) {
+        if (wait) await pause(wait);
+        try {
+            await dedicatedQuery('INSERT INTO sf_daily_mail (mail_date) VALUES ($1) ON CONFLICT DO NOTHING', [date]);
+            return;
+        } catch (err) { last = err; }
+    }
+    throw new Error(`메일은 보냈지만 보낸 기록을 남기지 못했다: ${String(last?.message ?? last)}`);
+}
 
 /** sendStatusMail('YYYY-MM-DD') → { outcome: sent|already_sent|failed, missingLogin, error } */
 export async function sendStatusMail(date) {
     assertDateString(date);
     const cfg = mailConfig();
     let missingLogin = [];
-    try {
-        return await inDedicatedTx(async (c) => {
-            // Callers for the same date queue here; whoever comes after a sent mail sees the record.
-            await c.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [LOCK.mail, date]);
-            const done = await c.query('SELECT 1 FROM sf_daily_mail WHERE mail_date = $1', [date]);
-            if (done.rowCount) return { outcome: 'already_sent', missingLogin: [], error: null };
-            const counts = await normalSaveCounts(COMPANIES, date);
-            const rows = COMPANIES.map((co) => ({
-                company: co,
-                counts: Object.fromEntries(STEPS.map((s) => [s.step, counts[co.code][s.useSe] ?? 0])),
-            }));
-            const report = buildReport(date, rows, cfg.link);
-            missingLogin = report.missingLogin;
-            if (!cfg.host || !cfg.user || !cfg.pass || !cfg.to.length) throw new Error('메일 설정(SMTP_HOST · SMTP_USER · SMTP_PASS · SF_REPORT_TO)이 비어 있다');
-            await sendMail({
-                host: cfg.host, port: cfg.port, user: cfg.user, pass: cfg.pass, from: cfg.user, to: cfg.to,
-                message: mimeMessage({ from: cfg.user, to: cfg.to, subject: report.subject, html: report.html, text: report.text }),
-            });
-            await c.query('INSERT INTO sf_daily_mail (mail_date) VALUES ($1) ON CONFLICT DO NOTHING', [date]);
-            return { outcome: 'sent', missingLogin: report.missingLogin, error: null };
-        });
-    } catch (err) {
-        const f = failed(err, missingLogin);
+    const hide = (f) => {
         if (cfg.pass && f.error.includes(cfg.pass)) f.error = f.error.split(cfg.pass).join('***');
         return f;
-    }
+    };
+    let c;
+    try { c = await dedicatedClient(); } catch (err) { return hide(failed(err)); }
+    let delivered = false;
+    let broken = false;
+    try {
+        await c.query('BEGIN');
+        // Callers for the same date queue here; whoever comes after a sent mail sees the record.
+        await c.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [LOCK.mail, date]);
+        const done = await c.query('SELECT 1 FROM sf_daily_mail WHERE mail_date = $1', [date]);
+        if (done.rowCount) {
+            await c.query('COMMIT');
+            return { outcome: 'already_sent', missingLogin: [], error: null };
+        }
+        const counts = await normalSaveCounts(COMPANIES, date);
+        const rows = COMPANIES.map((co) => ({
+            company: co,
+            counts: Object.fromEntries(STEPS.map((s) => [s.step, counts[co.code][s.useSe] ?? 0])),
+        }));
+        const report = buildReport(date, rows, cfg.link);
+        missingLogin = report.missingLogin;
+        if (!cfg.host || !cfg.user || !cfg.pass || !cfg.to.length) throw new Error('메일 설정(SMTP_HOST · SMTP_USER · SMTP_PASS · SF_REPORT_TO)이 비어 있다');
+        await sendMail({
+            host: cfg.host, port: cfg.port, user: cfg.user, pass: cfg.pass, from: cfg.user, to: cfg.to,
+            message: mimeMessage({ from: cfg.user, to: cfg.to, subject: report.subject, html: report.html, text: report.text }),
+        });
+        delivered = true;
+        // Record "sent" while still holding the date lock; a failed attempt rolls back to the savepoint and tries again.
+        let recorded = false;
+        for (const wait of RECORD_RETRY_MS.slice(0, 3)) {
+            if (wait) await pause(wait);
+            try {
+                await c.query('SAVEPOINT record_sent');
+                await c.query('INSERT INTO sf_daily_mail (mail_date) VALUES ($1) ON CONFLICT DO NOTHING', [date]);
+                recorded = true;
+                break;
+            } catch {
+                await c.query('ROLLBACK TO SAVEPOINT record_sent').catch(() => {});
+            }
+        }
+        if (!recorded) throw new Error('보낸 기록 쓰기 실패');
+        await c.query('COMMIT');
+        return { outcome: 'sent', missingLogin: report.missingLogin, error: null };
+    } catch (err) {
+        await c.query('ROLLBACK').catch(() => { broken = true; });
+        if (delivered) {
+            // The mail server accepted the mail but the in-lock record failed: write it outside the lock, with retries.
+            try {
+                await recordSent(date);
+                return { outcome: 'sent', missingLogin, error: null };
+            } catch (err2) { return hide(failed(err2, missingLogin)); }
+        }
+        return hide(failed(err, missingLogin));
+    } finally { c.release(broken); }
 }
