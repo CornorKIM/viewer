@@ -1,0 +1,72 @@
+# sf-daily gate harness. Run through tests/run.sh only (it tears everything down afterwards).
+# - Every container / network / volume name contains "sfdaily-test".
+# - The test runner and the DB sit on an internal network: no route to the internet, so the real
+#   log-collection API, Google calendar, Gmail SMTP and the Windows PostgreSQL are unreachable.
+# - The real host names the contracts fix (log API, calendar) are pinned to 127.0.0.1, where the
+#   in-process stubs listen with a throwaway test CA (NODE_EXTRA_CA_CERTS).
+# - No host ports are published.
+name: sfdaily-test
+
+services:
+  sfdaily-test-db:
+    image: postgres:16-alpine
+    container_name: sfdaily-test-db
+    environment:
+      POSTGRES_PASSWORD: sfdaily-test-pw
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./lib/db-init:/docker-entrypoint-initdb.d:ro
+    networks: [sfdaily-test-internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sfdaily"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  # Installs package.json dependencies (implementation's included) into a throwaway volume.
+  # The only container with network egress; it never runs tests.
+  sfdaily-test-deps:
+    image: node:22-alpine
+    profiles: [deps]
+    working_dir: /deps
+    volumes:
+      - ..:/repo:ro
+      - sfdaily-test-modules:/deps
+    networks: [sfdaily-test-egress]
+    command: >-
+      sh -c "cp /repo/package.json /repo/package-lock.json /deps/ &&
+             npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error"
+
+  sfdaily-test-runner:
+    image: node:22-alpine
+    working_dir: /app/repo
+    depends_on:
+      sfdaily-test-db:
+        condition: service_healthy
+    networks: [sfdaily-test-internal]
+    extra_hosts:
+      - "log.smart-factory.kr:127.0.0.1"
+      - "calendar.google.com:127.0.0.1"
+      - "smtp.test:127.0.0.1"
+    environment:
+      TZ: UTC
+      NODE_EXTRA_CA_CERTS: /app/repo/tests/lib/tls/ca.crt
+      PG_HOST: sfdaily-test-db
+      PG_PASSWORD: sfdaily-test-pw
+      SF_DB_URL: postgres://postgres:sfdaily-test-pw@sfdaily-test-db:5432/sfdaily
+    volumes:
+      - sfdaily-test-modules:/app
+      - ..:/app/repo:ro
+    entrypoint: ["sh", "/app/repo/tests/lib/container-run.sh"]
+
+networks:
+  sfdaily-test-internal:
+    name: sfdaily-test-internal
+    internal: true
+  sfdaily-test-egress:
+    name: sfdaily-test-egress
+
+volumes:
+  sfdaily-test-modules:
+    name: sfdaily-test-modules
