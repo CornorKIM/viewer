@@ -1,5 +1,5 @@
 // Vercel Serverless Function — 스마트공장 로그 송수신 이력 조회(tp23.sf_log_history + 유형1 tp1.sf_log_history).
-// GET /api/sf-log-history?days=7[&set=A|CDR]  (유형1 업체는 set 값으로 회사 코드 사용) → { summary: 날짜·업체별 요약, rows: 최근 이력(최대 500건, 최신순), codes: 결과 코드표 }
+// GET /api/sf-log-history?days=7[&type=tp1|tp23][&set=A|CDR]  (유형1 업체는 set 값으로 회사 코드 사용) → { summary: 날짜·업체별 요약, rows: 최근 이력(최대 500건, 최신순), codes: 결과 코드표 }
 // 각 행·요약에 결과 의미(meaning)·수준(level: ok/test/info/error)·조치(action)를 붙임.
 // 접속 IP는 DB에만 저장하고 응답·화면에는 내보내지 않음.
 // 화면: /sflog.html
@@ -61,8 +61,9 @@ export default async function handler(req, res) {
     const days = Math.min(90, Math.max(1, Number.parseInt(query.days, 10) || 7));
     const wanted = String(query.set || '').toUpperCase();
     const set = SET_NAMES[wanted] || TP1_COMPANIES[wanted] ? wanted : null;
-    const wantTp23 = !set || Boolean(SET_NAMES[set]);
-    const wantTp1 = !set || Boolean(TP1_COMPANIES[set]);
+    const type = ['tp1', 'tp23'].includes(String(query.type || '').toLowerCase()) ? String(query.type).toLowerCase() : null;
+    const wantTp23 = (!set || Boolean(SET_NAMES[set])) && type !== 'tp1';
+    const wantTp1 = (!set || Boolean(TP1_COMPANIES[set])) && type !== 'tp23';
 
     const client = new Client(PG_CONFIG);
     try {
@@ -85,7 +86,7 @@ export default async function handler(req, res) {
             .map(({ sent_at, ...r }) => ({ ...r, name: nameOf(r.set_code), data_usgqty: Number(r.data_usgqty), ...describeResult(r.result_code, r.error), code: r.result_code }));
         res.setHeader('Cache-Control', 'no-store');
         const codes = Object.entries(SF_RESULT_CODES).map(([code, v]) => ({ code, ...v }));
-        res.status(200).json({ days, set, summary, rows, codes });
+        res.status(200).json({ days, type, set, summary, rows, codes });
     } catch (err) {
         res.status(500).json({ error: 'db_query_failed', message: String(err) });
     } finally {
