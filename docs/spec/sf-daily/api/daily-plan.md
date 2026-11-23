@@ -2,7 +2,7 @@
 
 > 방향: daily-plan → runner
 > 소유: sf-daily(daily-plan) · 종류: 모듈 사이
-> 상태: 동결
+> 상태: 동결 · 사람 확정
 
 ## 목적
 
@@ -21,7 +21,7 @@
 | `companies[].query` | `Date` | 예 | 조회 계획 시각 |
 | `companies[].logout` | `Date` | 예 | 로그아웃 계획 시각 |
 
-계획은 공유 PostgreSQL 의 스키마 `sf_daily` 에 남는다. 테이블 모양은 이 모듈 안의 일이다.
+계획은 sf-daily 전용 DB 에 남는다. 테이블 모양은 이 모듈 안의 일이다.
 
 ## 오류
 

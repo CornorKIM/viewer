@@ -1,6 +1,6 @@
 # business-day — 그날이 영업일인지 판단하고, 확인할 수 없으면 영업일이 아니라고 답한다
 
-> 상태: 살아있는 계약 · 독자: 구현자 / 오케스트레이터
+> 상태: 사람 확정 · 독자: 구현자 / 오케스트레이터
 > 산출물: sf-daily
 > 이음새: 영업일 판단 → `sf-daily/api/business-day.md` · 휴일 달력 → `interfaces/kr-holiday-calendar.md`
 > 단언: 같은 자리의 `tests/sf-daily/business-day/GATES.md`

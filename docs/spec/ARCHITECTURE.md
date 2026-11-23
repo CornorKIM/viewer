@@ -26,6 +26,7 @@ factory-3d-viewer
     ├── (모듈) step-sender — 때가 된 단계 하나를 보냄: 그날 · 앞 단계 · 이미 정상 저장 여부 확인, 선점, 전송, 이력 기록
     ├── (모듈) status-mail — 그날 업체별 단계 정상 저장 건수 메일, 로그인 0 경고
     └── (모듈) runner — 설정 확인 · 켜고 끄기 · 시각에 따라 위 모듈을 부름
+    (sf-daily 전용 DB — 하루 계획 · 자동 전송 표시 · 메일 기록. 같은 compose 의 PostgreSQL 컨테이너, sf-daily 만 쓴다)
     ═══ 이음새: 로그수집 API ═══ → interfaces/sf-log-api.md
     ═══ 이음새: 휴일 달력 ═══ → interfaces/kr-holiday-calendar.md
     ═══ 이음새: 메일 서버 ═══ → interfaces/smtp-mail.md
@@ -68,7 +69,7 @@ factory-3d-viewer
 
 | 산출물 폴더 | 코드 위치 |
 |---|---|
-| `sf-daily/` | `sf-daily/` (같은 Docker 이미지의 별도 서비스) |
+| `sf-daily/` | `sf-daily/` (같은 Docker 이미지의 별도 서비스 + 전용 PostgreSQL 컨테이너) |
 | `viewer/` (계약 없음) | `api/` · `public/` · `main.js` · `docker/server.mjs` |
 
 ## 작성 현황 (위임 추적용)

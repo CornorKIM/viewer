@@ -1,6 +1,6 @@
 # daily-plan — 하루 계획은 업체 · 그날마다 한 번만 정하고 다시 정하지 않는다
 
-> 상태: 살아있는 계약 · 독자: 구현자 / 오케스트레이터
+> 상태: 사람 확정 · 독자: 구현자 / 오케스트레이터
 > 산출물: sf-daily
 > 이음새: 그날 하루 계획 → `sf-daily/api/daily-plan.md` · 업체 명부 → `sf-daily/spec/companies.md`
 > 단언: 같은 자리의 `tests/sf-daily/daily-plan/GATES.md`
@@ -11,19 +11,18 @@
 
 ## 언어 · 런타임
 
-Node.js(ES 모듈). 계획은 공유 PostgreSQL 에 sf-daily 전용 자리로 남는다.
+Node.js(ES 모듈). 계획은 sf-daily 전용 DB 에 남는다.
 
 ## 의존 도구 · 시스템
 
-- PostgreSQL — 전송 이력과 같은 서버. sf-daily 전용 스키마 `sf_daily` 를 쓴다.
+- sf-daily 전용 DB(PostgreSQL) — sf-daily 만 쓰는 DB. 다른 서비스와 공유하지 않는다.
 - 업체 명부 — `sf-daily/spec/companies.md`(업체 목록 · 시각 범위).
 
 ## 입력
 
 - 그날(KST 날짜) 하나.
 - **설정**
-  - `PG_PASSWORD`(필수) — 공유 PostgreSQL 비밀번호. 비어 있으면 runner 가 시작하지 않는다.
-  - `PG_HOST`(기본: 공유 DB 서버) — 비어 있으면 기본값을 쓴다.
+  - `SF_DB_URL`(필수) — 전용 DB 접속 주소(`postgres://…`). 비어 있으면 runner 가 시작하지 않는다.
 
 ## 출력 (계약)
 

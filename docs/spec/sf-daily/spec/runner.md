@@ -1,6 +1,6 @@
 # runner — 실행기는 설정을 확인하고, 영업일에만 계획대로 단계를 보내고, 23시에 현황 메일을 보낸다
 
-> 상태: 살아있는 계약 · 독자: 구현자 / 오케스트레이터
+> 상태: 사람 확정 · 독자: 구현자 / 오케스트레이터
 > 산출물: sf-daily
 > 이음새: 영업일 판단 → `sf-daily/api/business-day.md` · 하루 계획 → `sf-daily/api/daily-plan.md` · 단계 보내기 → `sf-daily/api/step-sender.md` · 현황 메일 → `sf-daily/api/status-mail.md`
 > 단언: 같은 자리의 `tests/sf-daily/runner/GATES.md`
@@ -28,9 +28,10 @@ Node.js(ES 모듈). 뷰어와 같은 Docker 이미지를 쓰는 별도 서비스
 | `SF_DAILY_TICK_SECONDS` | `30` | 시각을 확인하는 간격(초) | 정수가 아니거나 10 미만 · 60 초과 |
 | `SF_REPORT_AT` | `23:00` | 현황 메일을 보내는 KST 시각 | `HH:MM` 이 아니다 |
 | 업체 인증키 | — | `sf-daily/spec/companies.md` | `SF_DAILY_ENABLED=true` 인데 하나라도 비어 있다 |
-| `PG_PASSWORD` | — | `sf-daily/spec/daily-plan.md` | 비어 있다 |
+| `SF_DB_URL` | — | `sf-daily/spec/daily-plan.md` | 비어 있다 |
+| `PG_PASSWORD` · `PG_HOST` | — · `175.193.55.102` | `sf-daily/spec/step-sender.md` | 비밀번호가 비어 있다 |
 | 메일 설정 | — | `sf-daily/spec/status-mail.md` | `SF_DAILY_ENABLED=true` 인데 필수가 비어 있거나 받는 주소 모양이 틀렸다 |
-| `SF_LOG_DEFAULT_IP` | `175.193.55.102` | `sf-daily/spec/step-sender.md` | 30자를 넘는다 |
+| `SF_LOG_DEFAULT_IP` | `175.193.55.102` | `sf-daily/spec/step-sender.md` | IPv4 모양이 아니다 |
 
 ## 출력 (계약)
 

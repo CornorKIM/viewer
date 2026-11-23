@@ -2,7 +2,7 @@
 
 > 방향: business-day → runner
 > 소유: sf-daily(business-day) · 종류: 모듈 사이
-> 상태: 동결
+> 상태: 동결 · 사람 확정
 
 ## 목적
 

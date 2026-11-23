@@ -1,6 +1,6 @@
 # step-sender — 단계 하나를 그날 한 번만 정상 저장되게 보내고, 보낸 것은 모두 이력에 남긴다
 
-> 상태: 살아있는 계약 · 독자: 구현자 / 오케스트레이터
+> 상태: 사람 확정 · 독자: 구현자 / 오케스트레이터
 > 산출물: sf-daily
 > 이음새: 단계 보내기 → `sf-daily/api/step-sender.md` · 로그수집 API → `interfaces/sf-log-api.md` · 전송 이력 → `interfaces/sf-log-history.md` · 업체 명부 → `sf-daily/spec/companies.md`
 > 단언: 같은 자리의 `tests/sf-daily/step-sender/GATES.md`
@@ -16,7 +16,8 @@ Node.js(ES 모듈).
 ## 의존 도구 · 시스템
 
 - 사업관리시스템 로그수집 API(제품 밖) — `interfaces/sf-log-api.md`.
-- 공유 PostgreSQL 의 전송 이력 — `interfaces/sf-log-history.md`.
+- 전송 이력(Windows PostgreSQL 의 기존 테이블) — `interfaces/sf-log-history.md`.
+- sf-daily 전용 DB — 자동 전송 표시와 동시 전송 막기 기록.
 - 업체 명부 — `sf-daily/spec/companies.md`.
 
 ## 입력
@@ -24,7 +25,9 @@ Node.js(ES 모듈).
 - 업체 코드 · 그날 · 단계 · 보내는 범위의 끝 시각. 모양은 `sf-daily/api/step-sender.md`.
 - **설정**
   - 업체 인증키 — `sf-daily/spec/companies.md` 의 업체 표.
-  - `SF_LOG_DEFAULT_IP`(기본 `175.193.55.102`) — 로그의 접속 IP 값. 30자를 넘으면 runner 가 시작하지 않는다.
+  - `SF_LOG_DEFAULT_IP`(기본 `175.193.55.102`, twin.smartline.kr 의 IP) — 로그의 접속 IP 값. IPv4 모양이 아니면 runner 가 시작하지 않는다.
+  - `PG_PASSWORD`(필수) · `PG_HOST`(기본 `175.193.55.102`) — 전송 이력 DB 접속. 비밀번호가 비어 있으면 runner 가 시작하지 않는다.
+  - `SF_DB_URL`(필수) — `sf-daily/spec/daily-plan.md` 와 같은 전용 DB.
 
 ## 출력 (계약)
 

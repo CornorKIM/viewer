@@ -1,6 +1,6 @@
 # status-mail — 현황 메일은 그날 업체별 단계 정상 저장 건수를 보이고 로그인 0 을 경고한다
 
-> 상태: 살아있는 계약 · 독자: 구현자 / 오케스트레이터
+> 상태: 사람 확정 · 독자: 구현자 / 오케스트레이터
 > 산출물: sf-daily
 > 이음새: 현황 메일 보내기 → `sf-daily/api/status-mail.md` · 전송 이력 → `interfaces/sf-log-history.md` · 메일 서버 → `interfaces/smtp-mail.md` · 업체 명부 → `sf-daily/spec/companies.md`
 > 단언: 같은 자리의 `tests/sf-daily/status-mail/GATES.md`
@@ -15,7 +15,8 @@ Node.js(ES 모듈).
 
 ## 의존 도구 · 시스템
 
-- 공유 PostgreSQL 의 전송 이력 — `interfaces/sf-log-history.md`.
+- 전송 이력(Windows PostgreSQL 의 기존 테이블) — `interfaces/sf-log-history.md`.
+- sf-daily 전용 DB — 그날 메일을 보냈다는 기록.
 - 메일 서버(제품 밖) — `interfaces/smtp-mail.md`.
 - 업체 명부 — `sf-daily/spec/companies.md`.
 

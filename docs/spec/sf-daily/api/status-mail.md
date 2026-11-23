@@ -2,7 +2,7 @@
 
 > 방향: runner → status-mail
 > 소유: sf-daily(status-mail) · 종류: 모듈 사이
-> 상태: 동결
+> 상태: 동결 · 사람 확정
 
 ## 목적
 
@@ -18,7 +18,7 @@
 | `missingLogin` | 문자열 배열 | 예 | 로그인 건수가 0 인 업체 코드(명부 순서). `already_sent` 면 빈 배열 |
 | `error` | 문자열 · `null` | 예 | `failed` 일 때 사유. 비밀번호를 담지 않는다 |
 
-그날 메일을 보냈다는 기록은 공유 PostgreSQL 스키마 `sf_daily` 에 남는다. 모양은 이 모듈 안의 일이다.
+그날 메일을 보냈다는 기록은 sf-daily 전용 DB 에 남는다. 모양은 이 모듈 안의 일이다.
 
 ## 오류
 

@@ -1,6 +1,6 @@
 # companies — 업체 명부는 다섯 업체와 그 업체의 전송 값 · 시각 범위를 정한다
 
-> 상태: 살아있는 계약 · 독자: 구현자 / 오케스트레이터
+> 상태: 사람 확정 · 독자: 구현자 / 오케스트레이터
 > 산출물: sf-daily
 > 이음새: 업체 명부 → daily-plan · step-sender · status-mail 이 이 계약을 그대로 읽는다
 > 단언: 같은 자리의 `tests/sf-daily/companies/GATES.md`
