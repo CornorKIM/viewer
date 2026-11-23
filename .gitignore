@@ -3,3 +3,5 @@ dist
 .vercel
 .env*
 !.env.example
+docs/접속정보.png
+docs/test/
