@@ -7,6 +7,7 @@ const DONE = new Set(['stored', 'already_stored', 'past_day', 'window_passed']);
 const MAIL_DONE = new Set(['sent', 'already_sent']);
 const MAIL_RETRY_MS = 5 * 60_000;
 const QUERY_WINDOW_MS = 3 * 3600_000;
+const UNKNOWN_REJUDGE_MS = 10 * 60_000;
 
 /** Window end of a step for a company on a date, given that company's plan entry. */
 export function windowEnd(date, code, step, planned) {
@@ -21,12 +22,26 @@ export function createRunner(deps = {}) {
     const now = deps.now || (() => new Date());
     const log = deps.log || ((line) => process.stdout.write(`${line}\n`));
     const { judgeBusinessDay, getDailyPlan, sendStep, sendStatusMail } = deps;
+    const stopRequested = deps.stopRequested || (() => false); // optional: no new request once the service is stopping
     const enabled = String(env.SF_DAILY_ENABLED ?? '').trim() === 'true';
     const reportAt = String(env.SF_REPORT_AT ?? '').trim() || '23:00';
 
-    let day = null; // { date, plan, done: Set<'code|step'>, mailDone, mailTriedAt, lastJudgment }
+    let day = null; // per-day state, see newDay()
     const stamp = (t) => `${kstDate(t)} ${kstTime(t)}`;
     const say = (t, msg) => log(`[sf-daily] ${stamp(t)} ${msg}`);
+
+    const newDay = (date) => ({
+        date,
+        plan: null,
+        done: new Set(), // 'code|step' that are not requested again today
+        mailDone: false,
+        mailTriedAt: null,
+        judgment: null, // last judgment result of the day
+        judgedAt: null,
+        off: false, // an off judgment happened today
+        fresh: false, // a judgment was taken in this round and no request followed it yet
+        lastLogged: null,
+    });
 
     /** At most one step per company: the first not-finished step whose time has come and whose window is open. */
     function dueSteps(t) {
@@ -53,25 +68,45 @@ export function createRunner(deps = {}) {
         return day.mailTriedAt === null || t.getTime() - day.mailTriedAt >= MAIL_RETRY_MS;
     }
 
-    async function tick() {
-        if (!enabled) return;
-        const t = now();
-        const date = kstDate(t);
-        if (!day || day.date !== date) day = { date, plan: null, done: new Set(), mailDone: false, mailTriedAt: null, lastJudgment: null };
-
-        // Nothing can be due once the plan is known and no step or mail has come due.
-        if (day.plan && dueSteps(t).length === 0 && !mailDue(t)) return;
-
+    /** Takes a judgment now and records it for the day. Returns its result. */
+    async function judge(t) {
         let j;
         try {
             j = await judgeBusinessDay(t);
         } catch (err) {
-            say(t, `영업일 판단 오류: ${String(err?.message ?? err)}`);
-            return;
+            j = { date: day.date, result: 'unknown', reason: `error ${String(err?.message ?? err)}`, holidayName: null };
         }
-        const jText = `${j.result}${j.reason ? ` ${j.reason}` : ''}${j.holidayName ? ` (${j.holidayName})` : ''}`;
-        if (jText !== day.lastJudgment) { say(t, `영업일 판단 ${j.date}: ${jText}`); day.lastJudgment = jText; }
-        if (j.result !== 'business') return;
+        day.judgment = j.result;
+        day.judgedAt = t.getTime();
+        day.fresh = true;
+        if (j.result === 'off') day.off = true;
+        const text = `${j.result}${j.reason ? ` ${j.reason}` : ''}${j.holidayName ? ` (${j.holidayName})` : ''}`;
+        if (text !== day.lastLogged) { say(t, `영업일 판단 ${j.date}: ${text}`); day.lastLogged = text; }
+        return j.result;
+    }
+
+    /** Right before a request: a fresh judgment (one taken earlier in this round with no request since counts). */
+    async function businessRightBefore(t) {
+        const ok = (day.fresh && day.judgment === 'business') || (await judge(t)) === 'business';
+        day.fresh = false;
+        return ok;
+    }
+
+    async function tick() {
+        if (!enabled) return;
+        const t = now();
+        const date = kstDate(t);
+        if (!day || day.date !== date) day = newDay(date);
+        day.fresh = false;
+
+        // runner §2-1: first round of the day judges; an off day is not judged again; unknown again after 10 minutes.
+        if (day.off) return;
+        if (day.judgment === null) {
+            if ((await judge(t)) !== 'business') return;
+        } else if (day.judgment === 'unknown') {
+            if (t.getTime() - day.judgedAt < UNKNOWN_REJUDGE_MS) return;
+            if ((await judge(t)) !== 'business') return;
+        }
 
         if (!day.plan) {
             try {
@@ -84,6 +119,7 @@ export function createRunner(deps = {}) {
         }
 
         for (const req of dueSteps(t)) {
+            if (stopRequested() || !(await businessRightBefore(t))) return;
             let r;
             try {
                 r = await sendStep(req);
@@ -96,6 +132,7 @@ export function createRunner(deps = {}) {
         }
 
         if (mailDue(t)) {
+            if (stopRequested() || !(await businessRightBefore(t))) return;
             let r;
             try {
                 r = await sendStatusMail(date);
