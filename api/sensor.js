@@ -8,7 +8,8 @@
 // - 클라이언트가 Flux 쿼리를 자유롭게 보내게 하지 않고, 아래처럼 서버에서
 //   쿼리 내용을 고정해서 "허용된 것만" 조회하도록 제한했습니다.
 
-const INFLUX_URL = 'http://175.193.55.102:8086/api/v2/query?org=dx';
+// INFLUX_URL overrides the server (e.g. http://sl-influxdb:8086 in Docker); default = DB server.
+const INFLUX_URL = `${(process.env.INFLUX_URL || 'http://175.193.55.102:8086').replace(/\/+$/, '')}/api/v2/query?org=dx`;
 
 // YC_2025 버킷, topic="YC_2025/63476" 센서의 RSSI/ch1/ch2/ch3 최신값.
 //

@@ -101,7 +101,8 @@ export async function sendTp1Log(code, { useSe, test, conectIp, dataUsgqty }) {
 }
 
 // ── 센서 데이터(InfluxDB) 최근 N분 건수·바이트 ──
-const INFLUX_BASE = 'http://175.193.55.102:8086/api/v2/query';
+// INFLUX_URL overrides the server (e.g. http://sl-influxdb:8086 in Docker); default = DB server.
+const INFLUX_BASE = `${(process.env.INFLUX_URL || 'http://175.193.55.102:8086').replace(/\/+$/, '')}/api/v2/query`;
 const SAFE = /^[\w./:-]{1,120}$/; // Flux 문자열에 넣을 값은 이 문자만 허용
 
 export function sensorConfig(code) {
