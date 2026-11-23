@@ -36,7 +36,7 @@ factory-3d-viewer
 
 | 무엇 | 생산 → 소비 | 위치 | 계약 |
 |---|---|---|---|
-| 업체 명부(코드 · 유형 · 이름 · 키 자리 · 시스템 사용자 · 시각 범위) | companies → daily-plan, step-sender, status-mail | 산출물 안 | `sf-daily/spec/companies.md` |
+| 업체 명부(코드 · 유형 · 이름 · 키 자리 · 시스템 사용자 · 시각 범위) | companies → runner, daily-plan, step-sender, status-mail | 산출물 안 | `sf-daily/spec/companies.md` |
 | 영업일 판단 | business-day → runner | 산출물 안 | `sf-daily/api/business-day.md` |
 | 그날 하루 계획 | daily-plan → runner | 산출물 안 | `sf-daily/api/daily-plan.md` |
 | 단계 하나 보내기 요청과 결과 | runner → step-sender | 산출물 안 | `sf-daily/api/step-sender.md` |
@@ -46,13 +46,13 @@ factory-3d-viewer
 | 메일 발송 | status-mail → 메일 서버 | 제품 밖 | `interfaces/smtp-mail.md` |
 | 전송 이력(쓰기 · 그날 정상 저장 건수 읽기) | viewer(소유) ↔ step-sender, status-mail | 산출물 사이 | `interfaces/sf-log-history.md` |
 
-**순환 없음** — 방향 그래프: runner → {business-day, daily-plan, step-sender, status-mail}; daily-plan · step-sender · status-mail → companies; step-sender · status-mail → 전송 이력; business-day → 휴일 달력; step-sender → 로그수집 API; status-mail → 메일 서버. 되돌아오는 화살표가 없다.
+**순환 없음** — 방향 그래프: runner → {business-day, daily-plan, step-sender, status-mail, companies}; daily-plan · step-sender · status-mail → companies; step-sender · status-mail → 전송 이력; business-day → 휴일 달력; step-sender → 로그수집 API; status-mail → 메일 서버. 되돌아오는 화살표가 없다.
 
 ## 공통 규칙
 
 | 규칙 | 소유자(모듈 · 이음새) | 쓰는 곳 |
 |---|---|---|
-| 업체 목록 · 업체의 유형 · 이름 · 인증키 자리 · 시스템 사용자 값 · 단계별 시각 범위 | `sf-daily/spec/companies.md` | daily-plan, step-sender, status-mail |
+| 업체 목록 · 업체의 유형 · 이름 · 인증키 자리 · 시스템 사용자 값 · 단계별 시각 범위 | `sf-daily/spec/companies.md` | runner, daily-plan, step-sender, status-mail |
 | 그날(KST 날짜)과 영업일의 뜻 | `sf-daily/spec/business-day.md` | runner, daily-plan, step-sender, status-mail |
 | 업체 · 그날 · 단계의 정상 저장 건수 | `interfaces/sf-log-history.md` | step-sender(이미 보냈는가), status-mail(건수) |
 | 단계 코드(DO6001 · DO6003 · DO6002)와 결과 코드의 뜻 | `interfaces/sf-log-api.md` | step-sender, status-mail |
