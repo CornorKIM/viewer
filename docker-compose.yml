@@ -1,0 +1,17 @@
+services:
+  viewer:
+    build: .
+    image: factory-3d-viewer:latest
+    container_name: factory-3d-viewer
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${VIEWER_PORT:-20040}:3000"
+    networks:
+      - yc-network
+
+networks:
+  yc-network:
+    external: true
