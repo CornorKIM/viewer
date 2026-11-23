@@ -97,3 +97,43 @@ export async function historySchemaSnapshot() {
         WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' AND c.relkind IN ('r','v','m','S','f','p') ORDER BY 1, 2`);
     return JSON.stringify({ schemas: sch.rows, relations: rel.rows, columns: cols.rows, indexes: idx.rows });
 }
+
+/**
+ * on = true: every INSERT / UPDATE on both history tables fails (a test trigger raises an error);
+ * reads keep working. on = false: removes the trigger. Seed rows before switching it on.
+ */
+export async function failHistoryWrites(on) {
+    const q = (sql) => history().query(sql);
+    for (const t of ['tp23.sf_log_history', 'tp1.sf_log_history']) await q(`DROP TRIGGER IF EXISTS gate_refuse_write ON ${t}`);
+    if (!on) { await q('DROP FUNCTION IF EXISTS public.gate_refuse_write()'); return; }
+    await q(`CREATE OR REPLACE FUNCTION public.gate_refuse_write() RETURNS trigger LANGUAGE plpgsql AS
+        $$ BEGIN RAISE EXCEPTION 'gate: history write refused'; END $$`);
+    for (const t of ['tp23.sf_log_history', 'tp1.sf_log_history']) {
+        await q(`CREATE TRIGGER gate_refuse_write BEFORE INSERT OR UPDATE ON ${t} FOR EACH ROW EXECUTE FUNCTION public.gate_refuse_write()`);
+    }
+}
+
+/**
+ * Holds ACCESS EXCLUSIVE locks on both history tables in an open transaction on its own connection,
+ * so every query of other sessions on them waits. Returns { release(), longestWaitSeconds() } —
+ * longestWaitSeconds is the age of the oldest query of another session waiting on a lock (null if none).
+ */
+export async function lockHistoryTables() {
+    const c = new pg.Client({ host: process.env.PG_HOST, port: 5432, database: 'postgres', user: 'postgres', password: process.env.PG_PASSWORD });
+    await c.connect();
+    await c.query('BEGIN');
+    await c.query('LOCK TABLE tp23.sf_log_history, tp1.sf_log_history IN ACCESS EXCLUSIVE MODE');
+    const probe = await history().connect();
+    return {
+        async longestWaitSeconds() {
+            const r = await probe.query(`SELECT max(extract(epoch FROM now() - query_start))::float AS s FROM pg_stat_activity
+                WHERE wait_event_type = 'Lock' AND state = 'active' AND pid <> $1`, [c.processID]);
+            return r.rows[0].s;
+        },
+        async release() {
+            probe.release();
+            await c.query('ROLLBACK').catch(() => {});
+            await c.end().catch(() => {});
+        },
+    };
+}

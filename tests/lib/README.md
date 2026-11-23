@@ -84,8 +84,13 @@ All of sf-daily reads "now" through one clock:
 
 - `SF_DAILY_FAKE_NOW` unset → the real clock.
 - `SF_DAILY_FAKE_NOW=<ISO instant>` → now = that instant + the real time elapsed since the clock
-  first saw this value (it advances at real speed). Used by the service-process gates and by
-  `DP-09`.
+  first saw this value (it advances at real speed). Used by the disabled-service gates and by
+  `DP-09` — runner §6 forbids it when `SF_DAILY_ENABLED=true`.
+- The real clock is read through the JS `Date` (`Date.now()` / `new Date()`), not through another
+  time source. Gates that need an *enabled* service at a chosen instant preload
+  `tests/lib/fake-clock.js` into `node sf-daily/main.js` (`startService(env, { fakeNow, fakeRate })`):
+  it moves `Date` only — no sf-daily setting is involved — and can run it faster than real time;
+  timers keep real speed. The DB's `now()` is not moved.
 
 The step-sender and status-mail gates run on the real clock (history `sent_at` comes from the DB's
 `now()`), so "today" there is the real KST date. Do not run those gates across KST midnight.
@@ -119,12 +124,13 @@ await runner.tick(); // exactly one 회차 at deps.now()
 | `run.sh` · `../docker-compose.test.yml` · `container-run.sh` | the harness (see Running) |
 | `preflight.js` | isolation and stub self-checks before any gate |
 | `sut.js` | loads `sf-daily/<module>.js`; a missing file / export fails the test as `SUT_MISSING` |
-| `child.js` · `child-entry.js` · `wire.js` | call an export in a fresh node process · start `main.js` |
+| `child.js` · `child-entry.js` · `wire.js` | call an export in a fresh node process (`signal` kills it mid-call) · start `main.js` (timed output lines, `kill(sig)`, `fakeNow`) |
+| `fake-clock.js` | preload that moves `Date` in a spawned service (see Clock) |
 | `env.js` · `roster.js` | fake settings and secrets · the roster tables of `companies.md` |
 | `fake-internet.js` | HTTPS stand-in for the log API and the calendar; plain-HTTP calendar stub |
 | `smtp-stub.js` · `mime.js` · `html.js` | ESMTP stub with STARTTLS · MIME decoding · reading the mail HTML |
 | `ical.js` | iCalendar bodies shaped like the Google feed |
-| `db.js` | history / dedicated DB access, seeding, schema snapshots |
+| `db.js` | history / dedicated DB access, seeding, schema snapshots · `failHistoryWrites` (a test trigger refuses history writes) · `lockHistoryTables` (history queries wait) |
 | `sending.js` · `mail.js` | shared set-up for the step-sending and status-mail gates |
 | `kst.js` | KST arithmetic independent of the process time zone |
 | `tls/` | throwaway test CA and stub certificate (test-only, worthless outside the harness) |

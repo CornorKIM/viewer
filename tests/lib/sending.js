@@ -4,7 +4,7 @@
 import { before, after, beforeEach } from 'node:test';
 import { applyBaseEnv } from './env.js';
 import { startFakeInternet } from './fake-internet.js';
-import { resetHistory, clearDedicated, insertHistory, closeDb } from './db.js';
+import { resetHistory, clearDedicated, insertHistory, closeDb, failHistoryWrites } from './db.js';
 import { kstToday, MIN } from './kst.js';
 import { useSeOf } from './roster.js';
 
@@ -17,6 +17,7 @@ export function useSendingWorld(envExtra = {}) {
     beforeEach(async () => {
         await ctx.fake.start();
         ctx.fake.reset();
+        await failHistoryWrites(false);
         await resetHistory();
         await clearDedicated();
     });
