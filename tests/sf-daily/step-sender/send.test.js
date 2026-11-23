@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 import { fn } from '../../lib/sut.js';
 import { callInChild } from '../../lib/child.js';
 import { useSendingWorld, req, seedPrevious } from '../../lib/sending.js';
-import { insertHistory, historyRows, allHistoryRows } from '../../lib/db.js';
+import { insertHistory, historyRows, allHistoryRows, failHistoryWrites } from '../../lib/db.js';
 import { logReply } from '../../lib/fake-internet.js';
 import { TEST_IP, keyOf, secrets } from '../../lib/env.js';
 import { byCode, useSeOf } from '../../lib/roster.js';
-import { kstToday, kstDate, kstLogDt, addDays, MIN } from '../../lib/kst.js';
+import { kstToday, kstDate, kstLogDt, addDays, MIN, sleep } from '../../lib/kst.js';
 
 const world = useSendingWorld();
 const sendStep = () => fn('step-sender', 'sendStep');
@@ -232,4 +232,71 @@ test('SS-17 ASS-08 로그 일시의 날짜는 요청의 그날과 같다 — 세
     assert.equal(world.fake.log.requests.length, 3);
     for (const q of world.fake.log.requests) assert.equal(q.fields.logDt.slice(0, 10), kstToday());
     assert.deepEqual(world.fake.log.requests.map((q) => q.fields.useSe), [useSeOf('login'), useSeOf('query'), useSeOf('logout')]);
+});
+
+test('SS-19 응답 전에 보내던 프로세스가 죽어도(결과 코드 없는 일지 건) 그 단계는 이미 저장됨 — 다시 보내지 않는다', { timeout: 60_000 }, async () => {
+    const killer = new AbortController();
+    world.fake.log.respond = async () => { killer.abort(); await sleep(3000); return logReply('AP1002'); };
+    const first = await callInChild('step-sender', 'sendStep', [req('A', 'login')], { signal: killer.signal });
+    assert.equal(first.killed, true, 'the sending process was killed before it read the answer');
+    assert.equal(world.fake.log.requests.length, 1, 'the request reached the log API');
+    assert.equal((await historyRows('A')).length, 0, 'precondition: the killed sender left no history row');
+    world.fake.log.respond = () => logReply('AP1002');
+    const again = await (await sendStep())(req('A', 'login'));
+    assert.equal(again.outcome, 'already_stored');
+    assert.equal(world.fake.log.requests.length, 1, 'the step was not sent a second time');
+});
+
+test('SS-20 응답의 결과 코드가 일지 건에 적힌다 — AP1002 가 아닌 응답 뒤 같은 단계는 이미 저장됨이 아니라 10분 대기', async () => {
+    const send = await sendStep();
+    world.fake.log.respond = () => logReply('AP1029');
+    const a = await send(req('A', 'login'));
+    assert.equal(a.outcome, 'error_response');
+    const b = await send(req('A', 'login'));
+    assert.equal(b.outcome, 'wait_10min');
+    assert.equal(world.fake.log.requests.length, 1);
+});
+
+test('SS-21 결과 코드가 AP1002 인 일지 건은 이력 행이 없어도 확인 4 에서 정상 저장 — 이미 저장됨', async () => {
+    const send = await sendStep();
+    await failHistoryWrites(true);
+    try {
+        await send(req('A', 'login')).catch(() => null);
+        assert.equal(world.fake.log.requests.length, 1, 'the login was sent');
+        assert.equal((await historyRows('A')).length, 0, 'precondition: the history write failed');
+        const again = await send(req('A', 'login'));
+        assert.equal(again.outcome, 'already_stored');
+        assert.equal(world.fake.log.requests.length, 1, 'not sent a second time');
+    } finally { await failHistoryWrites(false); }
+});
+
+test('SS-22 일지 건의 요청 시각은 확인 5 에서 그 업체의 요청이다 — 이력 행이 없어도 10분 대기', async () => {
+    const send = await sendStep();
+    await seedPrevious('A', 'query'); // login stored 25 minutes ago: the history alone would allow a send
+    await failHistoryWrites(true);
+    try {
+        world.fake.log.respond = () => logReply('AP1029');
+        await send(req('A', 'query')).catch(() => null);
+        assert.equal(world.fake.log.requests.length, 1, 'the query was sent');
+        assert.equal((await historyRows('A')).length, 1, 'precondition: only the seeded login is in the history');
+        const again = await send(req('A', 'query'));
+        assert.equal(again.outcome, 'wait_10min');
+        assert.equal(world.fake.log.requests.length, 1, 'not sent a second time');
+    } finally { await failHistoryWrites(false); }
+});
+
+test('SS-23 이력 행 쓰기가 실패한 요청은 다음 보내기 요청 때 이력에 다시 쓰인다', async () => {
+    const send = await sendStep();
+    await failHistoryWrites(true);
+    try {
+        await send(req('A', 'login')).catch(() => null);
+    } finally { await failHistoryWrites(false); }
+    assert.equal(world.fake.log.requests.length, 1, 'the login was sent');
+    const sent = world.fake.log.requests[0].fields;
+    assert.equal((await historyRows('A')).length, 0, 'precondition: the history write failed');
+    await send(req('A', 'login')).catch(() => null); // the next send request
+    const rows = (await historyRows('A')).filter((r) => r.log_dt === sent.logDt);
+    assert.equal(rows.length, 1, 'the failed request has exactly one history row now');
+    assert.equal(rows[0].use_se, 'DO6001');
+    assert.equal(rows[0].result_code, 'AP1002');
 });
