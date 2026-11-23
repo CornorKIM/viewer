@@ -24,8 +24,8 @@ Node.js(ES 모듈).
 
 - 그날(KST 날짜) 하나.
 - **설정**
-  - `SMTP_HOST`(필수) · `SMTP_PORT`(기본 587) · `SMTP_USER`(필수) · `SMTP_PASS`(필수) — 메일 서버 접속. 필수가 비어 있으면 runner 가 시작하지 않는다.
-  - `SF_REPORT_TO`(필수) — 받는 사람 주소. 쉼표로 여럿. 비어 있거나 주소 모양이 아닌 값이 있으면 runner 가 시작하지 않는다.
+  - `SMTP_HOST`(필수) · `SMTP_PORT`(기본 587) · `SMTP_USER`(필수) · `SMTP_PASS`(필수) — 메일 서버 접속. 시작 거부 조건은 `sf-daily/spec/runner.md` 설정 표가 정한다.
+  - `SF_REPORT_TO`(필수) — 받는 사람 주소. 쉼표로 여럿. 시작 거부 조건은 `sf-daily/spec/runner.md` 설정 표가 정한다.
   - `SF_REPORT_LINK`(기본 `https://twin.smartline.kr/sflog.html`) — 메일에 넣는 이력 화면 주소.
 
 ## 출력 (계약)
