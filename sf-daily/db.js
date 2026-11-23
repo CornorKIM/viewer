@@ -4,7 +4,11 @@ import pg from 'pg';
 import { DB_HOST } from '../api/_sf-send.js';
 
 const pools = new Map();
-const QUERY_TIMEOUT_MS = 30_000;
+// Test-binding knob (tests/lib/README.md): SF_DB_QUERY_TIMEOUT_MS overrides the 30 s default.
+const QUERY_TIMEOUT_MS = (() => {
+    const v = Number.parseInt(process.env.SF_DB_QUERY_TIMEOUT_MS ?? '', 10);
+    return Number.isInteger(v) && v >= 1000 ? v : 30_000;
+})();
 
 function pool(key, config) {
     let p = pools.get(key);
