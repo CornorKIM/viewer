@@ -12,6 +12,55 @@ services:
     networks:
       - yc-network
 
+  # Business-day auto log sending + 23:00 status mail (docs/spec/sf-daily). Same image as the viewer.
+  # Stays idle until SF_DAILY_ENABLED=true in .env. No ports: it only makes outbound calls
+  # (log API, holiday calendar, SMTP, the history PostgreSQL) and talks to its own DB.
+  sf-daily:
+    build: .
+    image: factory-3d-viewer:latest
+    container_name: sf-daily
+    command: ["node", "sf-daily/main.js"]
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SF_DB_URL: postgres://sfdaily:${SF_DB_PASSWORD:-}@sf-daily-db:5432/sfdaily
+    healthcheck:
+      disable: true # the image's healthcheck probes the viewer's HTTP port, which sf-daily does not serve
+    depends_on:
+      sf-daily-db:
+        condition: service_healthy
+    networks:
+      - yc-network
+      - sf-daily-db
+
+  # sf-daily's dedicated PostgreSQL (plans, auto-send marks, mail records). Used by sf-daily only.
+  sf-daily-db:
+    image: postgres:16-alpine
+    container_name: sf-daily-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sfdaily
+      POSTGRES_DB: sfdaily
+      POSTGRES_PASSWORD: ${SF_DB_PASSWORD:-}
+    volumes:
+      - sf-daily-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sfdaily -d sfdaily"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - sf-daily-db
+
 networks:
   yc-network:
     external: true
+  # Private link sf-daily <-> sf-daily-db; internal: no route out, nothing else attached.
+  sf-daily-db:
+    internal: true
+
+volumes:
+  sf-daily-db-data:
