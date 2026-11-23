@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeRunner, planFor, PLAN, weekendJudge, kstAt } from './world.js';
-import { addDays } from '../../lib/kst.js';
+import { addDays, kstDate } from '../../lib/kst.js';
 import { CODES, byCode, WINDOWS } from '../../lib/roster.js';
 
 const D = '2026-11-24'; // Tuesday
@@ -33,20 +33,12 @@ test('RN-16 판단이 쉬는 날이면 그 회차에 단계 보내기 요청이 
     assert.equal(sat.steps().length, 0);
 });
 
-test('RN-17 판단이 확인 불가면 그 회차에 단계 보내기 요청이 없고 다음 회차에 다시 판단한다', async () => {
-    const unknownAt = +T('10:30:30');
-    const judge = (at) => (+at >= unknownAt && +at < unknownAt + 30_000
-        ? { date: D, result: 'unknown', reason: 'calendar_fetch_failed', holidayName: null }
-        : weekendJudge(at));
-    const w = await makeRunner({ judge });
-    await w.at(T('10:30:00'));
-    await w.at(T('10:30:30'));
-    const unknownTick = w.tick;
-    await w.at(T('10:31:00'));
-    assert.equal(w.inTick(unknownTick).filter((c) => c.kind === 'step').length, 0, 'no step in the unknown round');
-    const next = w.inTick(unknownTick + 1);
-    assert.ok(next.some((c) => c.kind === 'judge'), 'judged again next round');
-    assert.ok(next.some((c) => c.kind === 'step' && c.company === 'A' && c.step === 'login'), 'A login (due 10:30:10) requested next round');
+test('RN-17 판단이 확인 불가면 그 회차에 단계 보내기 요청이 없다', async () => {
+    const unknown = () => ({ date: D, result: 'unknown', reason: 'calendar_fetch_failed', holidayName: null });
+    const w = await makeRunner({ judge: unknown });
+    await w.run(T('10:30:30'), T('11:59:30')); // CDR · A · B · C · D logins come due in these rounds
+    assert.ok(w.calls.some((c) => c.kind === 'judge'), 'the runner judged');
+    assert.equal(w.steps().length, 0);
 });
 
 test('RN-18 현황 메일을 요청하기 직전에도 영업일 판단을 새로 받고, 영업일이 아니면 메일을 요청하지 않는다', async () => {
@@ -214,3 +206,81 @@ test('RN-32 보내기 결과와 메일 결과마다 실행 기록이 한 줄씩 
         assert.ok(lines >= n, `round ${t}: ${n} results, ${lines} log lines`);
     }
 });
+
+const judges = (w, from = -Infinity, to = Infinity) => w.calls.filter((c) => c.kind === 'judge' && c.now >= +from && c.now <= +to);
+const offJudgment = (date) => ({ date, result: 'off', reason: 'holiday', holidayName: '임시공휴일' });
+const unknownJudgment = (date) => ({ date, result: 'unknown', reason: 'calendar_fetch_failed', holidayName: null });
+
+test('RN-33 그날 아직 판단을 받은 적이 없으면 그날 첫 회차에 판단을 받는다 — 요청할 것이 없어도', async () => {
+    const w = await makeRunner();
+    await w.at(T('03:00:00')); // nothing is due at 03:00
+    assert.equal(judges(w).length, 1, 'judged in the first round of the day');
+    const next = addDays(D, 1);
+    await w.at(T('00:00:30', next));
+    assert.equal(judges(w, T('00:00:00', next)).length, 1, 'judged again in the first round of the next day');
+    // an off day does not carry over either
+    const sat = await makeRunner();
+    await sat.at(T('03:00:00', SAT));
+    await sat.at(T('03:00:00', addDays(SAT, 1)));
+    assert.equal(judges(sat).length, 2, 'Saturday and Sunday are each judged once in their first round');
+});
+
+test('RN-34 영업일 판단 뒤 요청할 단계도 메일도 없는 회차에는 판단을 받지 않는다', async () => {
+    const w = await makeRunner();
+    await w.run(T('03:00:00'), T('10:09:30')); // first step due: CDR login 10:10
+    assert.equal(judges(w).length, 1, 'only the first round judged before any step was due');
+    await w.run(T('10:10:00'), T('13:00:00')); // every login and query is stored by 13:00
+    await w.run(T('13:00:30'), T('17:29:30')); // next due: CDR logout 17:30
+    assert.equal(judges(w, T('13:00:30'), T('17:29:30')).length, 0, 'no judgment while nothing was due');
+});
+
+test('RN-35 확인 불가가 이어지면 그 판단에서 10분이 지난 첫 회차에 다시 받고, 그 전에는 받지 않는다', async () => {
+    const w = await makeRunner({ judge: (at) => unknownJudgment(D) });
+    await w.run(T('09:00:00'), T('11:00:00'));
+    const at = judges(w).map((c) => c.now);
+    assert.ok(at.length >= 3, `judgments ${at.length}`);
+    for (let i = 1; i < at.length; i++) {
+        const gap = (at[i] - at[i - 1]) / 1000;
+        assert.ok(gap >= 600 && gap <= 630, `gap ${gap}s between judgments`);
+    }
+    assert.equal(w.steps().length, 0);
+    // unknown until 10:35, a business day afterwards: next judgment and the due steps come at 10:40:30
+    const until = +T('10:35:00');
+    const v = await makeRunner({ judge: (t) => (+t < until ? unknownJudgment(D) : weekendJudge(t)) });
+    await v.run(T('10:30:30'), T('10:45:00'));
+    assert.equal(judges(v, T('10:31:00'), T('10:40:00')).length, 0, 'no judgment within 10 minutes of the unknown one');
+    assert.ok(judges(v, T('10:40:30'), T('10:40:30')).length >= 1, 'judged again 10 minutes later');
+    assert.equal(v.steps().filter((c) => c.now < +T('10:40:30')).length, 0, 'no step before that');
+    assert.ok(v.steps({ company: 'A', step: 'login' }).some((c) => c.now === +T('10:40:30')), 'A login requested once judged business');
+});
+
+test('RN-36 그날 판단 중 쉬는 날이 한 번이라도 있었으면 그날은 판단을 다시 받지 않는다', async () => {
+    const w = await makeRunner({ judge: (t) => (kstDate(t) === D ? offJudgment(D) : weekendJudge(t)) });
+    await w.run(T('09:00:00'), T('23:59:30'));
+    assert.equal(judges(w).length, 1, 'one judgment for the whole off day');
+    await w.at(T('00:00:30', addDays(D, 1)));
+    assert.equal(judges(w).length, 2, 'the next day is judged again');
+    // business in the morning, off at 10:40 (B login due): no judgment for the rest of the day
+    const v = await makeRunner({ judge: offBetween('10:35:00', '10:45:00') });
+    await v.run(T('10:00:00'), T('23:59:30'));
+    const off = v.calls.find((c) => c.kind === 'judge' && c.now >= +T('10:35:00') && c.now < +T('10:45:00'));
+    assert.ok(off, 'precondition: the runner judged during the off window');
+    assert.equal(judges(v, off.now + 1).length, 0, 'no judgment after the off judgment that day');
+});
+
+test('RN-37 쉬는 날로 판단된 그날에는 단계도 메일도 요청하지 않는다', async () => {
+    // off only between 10:35 and 10:45: a runner that asked again would hear "business"
+    const v = await makeRunner({ judge: offBetween('10:35:00', '10:45:00') });
+    await v.run(T('10:00:00'), T('23:59:30'));
+    const off = v.calls.find((c) => c.kind === 'judge' && c.now >= +T('10:35:00') && c.now < +T('10:45:00'));
+    assert.ok(off, 'precondition: the runner judged during the off window');
+    assert.ok(v.steps().some((c) => c.now < off.now), 'precondition: steps were sent before the off judgment');
+    assert.deepEqual(v.calls.filter((c) => (c.kind === 'step' || c.kind === 'mail') && c.now >= off.now).map((c) => `${c.kind} ${c.company ?? ''} ${c.step ?? ''}`), []);
+    const next = addDays(D, 1);
+    await v.run(T('10:00:00', next), T('10:31:00', next));
+    assert.ok(v.steps({ company: 'A', step: 'login' }).some((c) => c.date === next), 'steps resume the next day');
+});
+
+function offBetween(from, to) {
+    return (t) => (kstDate(t) === D && +t >= +T(from) && +t < +T(to) ? offJudgment(D) : weekendJudge(t));
+}
