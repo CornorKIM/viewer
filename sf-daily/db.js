@@ -60,15 +60,32 @@ CREATE TABLE IF NOT EXISTS sf_daily_plan (
     created_at   timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (plan_date, company)
 );
-CREATE TABLE IF NOT EXISTS sf_daily_auto_send (
-    history_table text        NOT NULL,
-    history_id    bigint      NOT NULL,
+-- Send journal (step-sender §5): one entry per auto-send request, written before the request.
+-- outcome NULL = sent, result never written. history_state: pending · recorded · unrecorded.
+-- history_id of a recorded entry is also the auto-send mark of a tp23 row (sf-log-history).
+CREATE TABLE IF NOT EXISTS sf_daily_send_journal (
+    entry_id      text        PRIMARY KEY,
     company       text        NOT NULL,
     send_date     text        NOT NULL,
     step          text        NOT NULL,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (history_table, history_id)
+    use_se        text        NOT NULL,
+    requested_at  timestamptz NOT NULL DEFAULT now(),
+    log_dt        text        NOT NULL,
+    sys_user      text        NOT NULL,
+    conect_ip     text        NOT NULL,
+    outcome       text,
+    result_code   text,
+    http_status   text,
+    result_msg    text,
+    result_detail text,
+    recptn_dt     text,
+    error         text,
+    history_state text        NOT NULL DEFAULT 'pending',
+    history_table text,
+    history_id    bigint
 );
+CREATE INDEX IF NOT EXISTS sf_daily_send_journal_day_idx ON sf_daily_send_journal (company, send_date, step);
+CREATE INDEX IF NOT EXISTS sf_daily_send_journal_req_idx ON sf_daily_send_journal (company, requested_at DESC);
 CREATE TABLE IF NOT EXISTS sf_daily_mail (
     mail_date    text        PRIMARY KEY,
     sent_at      timestamptz NOT NULL DEFAULT now()
@@ -122,4 +139,9 @@ export async function inDedicatedTx(fn) {
 
 export async function historyQuery(sql, params) {
     try { return await historyPool().query(sql, params); } catch (err) { throw dbError(err); }
+}
+
+export async function dedicatedQuery(sql, params) {
+    const c = await dedicatedClient();
+    try { return await c.query(sql, params); } catch (err) { throw dbError(err); } finally { c.release(); }
 }

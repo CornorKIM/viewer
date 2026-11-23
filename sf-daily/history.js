@@ -52,8 +52,9 @@ export async function requestedWithin(company, minutes) {
 /**
  * Appends one row for a request that went to the log API. Returns { table, id }.
  * fields: the sent log values except the key. response: { http, code, message, detail, at } | null.
+ * sentAt: the original request time when a row is written late (null = the DB default now()).
  */
-export async function appendRow(company, fields, response, error) {
+export async function appendRow(company, fields, response, error, sentAt = null) {
     const t = tableOf(company);
     const r = response || {};
     const common = [false, fields.useSe, fields.logDt, fields.sysUser, fields.conectIp, Number(fields.dataUsgqty) || 0,
@@ -61,12 +62,12 @@ export async function appendRow(company, fields, response, error) {
         r.detail ? String(r.detail) : null, r.at ? String(r.at).slice(0, 30) : null, error ?? null];
     const sql = company.history === 'tp23'
         ? `INSERT INTO tp23.sf_log_history (set_code, equipment_no, test, use_se, log_dt, sys_user, conect_ip, data_usgqty,
-               http_status, result_code, result_msg, result_detail, recptn_dt, error)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`
+               http_status, result_code, result_msg, result_detail, recptn_dt, error, sent_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, coalesce($15::timestamptz, now())) RETURNING id`
         : `INSERT INTO tp1.sf_log_history (company_code, source, test, use_se, log_dt, sys_user, conect_ip, data_usgqty,
-               http_status, result_code, result_msg, result_detail, recptn_dt, error)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`;
+               http_status, result_code, result_msg, result_detail, recptn_dt, error, sent_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, coalesce($15::timestamptz, now())) RETURNING id`;
     const head = company.history === 'tp23' ? [company.code, company.equipmentNo] : [company.code, 'auto'];
-    const res = await historyQuery(sql, [...head, ...common]);
+    const res = await historyQuery(sql, [...head, ...common, sentAt]);
     return { table: t.name, id: String(res.rows[0].id) };
 }
