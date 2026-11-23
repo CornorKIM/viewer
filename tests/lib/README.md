@@ -134,3 +134,5 @@ await runner.tick(); // exactly one 회차 at deps.now()
 | `sending.js` · `mail.js` | shared set-up for the step-sending and status-mail gates |
 | `kst.js` | KST arithmetic independent of the process time zone |
 | `tls/` | throwaway test CA and stub certificate (test-only, worthless outside the harness) |
+
+- `SF_DB_QUERY_TIMEOUT_MS` — optional; overrides the implementation's DB query timeout (default 30 s). RN-39 sets it high so a locked history read can keep a round stuck past 5 minutes.

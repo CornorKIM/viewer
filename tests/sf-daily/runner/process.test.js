@@ -186,7 +186,8 @@ test('RN-39 한 회차가 5분이 지나도 끝나지 않으면 서비스는 0 �
     // The history tables are locked: the round's history reads wait and the round cannot finish.
     const lock = await lockHistoryTables();
     try {
-        const s = start(serviceEnv({ SF_DAILY_TICK_SECONDS: '10' }), { fakeNow: kstAt(D, '11:58:00') });
+        // The implementation's 30 s query timeout would end the wait first; lift it so a round can stay stuck.
+        const s = start(serviceEnv({ SF_DAILY_TICK_SECONDS: '10', SF_DB_QUERY_TIMEOUT_MS: '900000' }), { fakeNow: kstAt(D, '11:58:00') });
         let longest = 0;
         let lastWait = null;
         while (!s.exit) {
@@ -229,7 +230,8 @@ async function until(cond, ms) { for (let i = 0; i < ms / 200 && !cond(); i++) a
 test('RN-40 종료 신호를 받으면 진행 중인 회차가 끝나기를 최대 15초 기다린 뒤 끝난다', { timeout: 120_000 }, async () => {
     // a round that finishes 6 s after the signal: the service waits for it, and the sent result is in the history
     const st = holdFirstRequest(6000);
-    const s = start(serviceEnv({ SF_DAILY_TICK_SECONDS: '10' }), { fakeNow: kstAt(D, '11:58:00') });
+    // The implementation's 30 s query timeout would end the wait first; lift it so a round can stay stuck.
+        const s = start(serviceEnv({ SF_DAILY_TICK_SECONDS: '10', SF_DB_QUERY_TIMEOUT_MS: '900000' }), { fakeNow: kstAt(D, '11:58:00') });
     assert.ok(await until(() => st.request, 20_000), `precondition: a step was being sent:\n${s.output}`);
     await sleep(500);
     const signalAt = Date.now();
