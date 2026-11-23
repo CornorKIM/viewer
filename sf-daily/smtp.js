@@ -59,8 +59,9 @@ function session(socket) {
             sock.removeAllListeners('close');
             sock.setTimeout(0);
             const secure = await new Promise((ok, bad) => {
-                const s = tls.connect({ socket: sock, servername }, () => ok(s));
-                s.once('error', bad);
+                const s = tls.connect({ socket: sock, servername }, () => { clearTimeout(t); ok(s); });
+                const t = setTimeout(() => { s.destroy(); bad(new SmtpError('TLS 핸드셰이크 시간 초과')); }, STEP_TIMEOUT_MS);
+                s.once('error', (err) => { clearTimeout(t); bad(err); });
             });
             secure.removeAllListeners('error');
             sock = secure;

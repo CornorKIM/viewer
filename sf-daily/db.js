@@ -4,12 +4,24 @@ import pg from 'pg';
 import { DB_HOST } from '../api/_sf-send.js';
 
 const pools = new Map();
+const QUERY_TIMEOUT_MS = 30_000;
 
 function pool(key, config) {
     let p = pools.get(key);
     if (!p) {
-        p = new pg.Pool({ max: 5, idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000, allowExitOnIdle: true, ...config });
+        p = new pg.Pool({
+            max: 5,
+            idleTimeoutMillis: 10_000,
+            connectionTimeoutMillis: 10_000,
+            allowExitOnIdle: true,
+            keepAlive: true,
+            statement_timeout: QUERY_TIMEOUT_MS, // server side, includes lock waits
+            query_timeout: QUERY_TIMEOUT_MS + 5_000, // client side, in case the server never answers
+            ...config,
+        });
         p.on('error', () => {}); // an idle client dropped by the server must not crash the service
+        // A checked-out client whose connection drops emits 'error' on itself; without a listener that crashes the process.
+        p.on('connect', (client) => client.on('error', () => {}));
         pools.set(key, p);
     }
     return p;
