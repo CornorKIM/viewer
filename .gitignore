@@ -3,5 +3,5 @@ dist
 .vercel
 .env*
 !.env.example
-docs/접속정보/
-docs/공고/
+docs/ops/접속정보/
+docs/external/공고/
