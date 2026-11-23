@@ -76,13 +76,13 @@ factory-3d-viewer
 
 | 모듈 | spec | api | GATES.md | 현재 정본 |
 |---|---|---|---|---|
-| companies | ✅ | 해당없음 | 미작성 | 없음 |
-| business-day | ✅ | ✅ | 미작성 | 없음 |
-| daily-plan | ✅ | ✅ | 미작성 | 없음 |
-| step-sender | ✅ | ✅ | 미작성 | 없음 |
-| status-mail | ✅ | ✅ | 미작성 | 없음 |
-| runner | ✅ | 해당없음 | 미작성 | 없음 |
-| interfaces/sf-log-history | — | ✅ | 미작성 | `api/_sf-history.js` · `api/_tp1.js` 의 테이블 정의 |
-| interfaces/sf-log-api | — | ✅ | 미작성 | `docs/external/log-api/` 의 연동가이드 v1.6 · 규격서 v1.7 |
-| interfaces/kr-holiday-calendar | — | ✅ | 미작성 | 없음 |
-| interfaces/smtp-mail | — | ✅ | 미작성 | 없음 |
+| companies | ✅ | 해당없음 | ✅ | 없음 |
+| business-day | ✅ | ✅ | ✅ | 없음 |
+| daily-plan | ✅ | ✅ | ✅ | 없음 |
+| step-sender | ✅ | ✅ | ✅ | 없음 |
+| status-mail | ✅ | ✅ | ✅ | 없음 |
+| runner | ✅ | 해당없음 | ✅ | 없음 |
+| interfaces/sf-log-history | — | ✅ | ✅ | `api/_sf-history.js` · `api/_tp1.js` 의 테이블 정의 |
+| interfaces/sf-log-api | — | ✅ | ✅ | `docs/external/log-api/` 의 연동가이드 v1.6 · 규격서 v1.7 |
+| interfaces/kr-holiday-calendar | — | ✅ | ✅ | 없음 |
+| interfaces/smtp-mail | — | ✅ | ✅ | 없음 |
