@@ -74,6 +74,10 @@ async function journalRequestedWithin(company, minutes) {
 const stored = async (company, date, step) => (await normalSaveCount(company, date, step.useSe)) >= 1 || journalStored(company, date, step);
 const recent = async (company) => (await requestedWithin(company, WAIT_MIN)) || journalRequestedWithin(company, WAIT_MIN);
 
+// Check 5 hit: a concurrent sender of this very step may have journalled between our check 4 and check 5.
+// Its journal entry is visible now, so asking check 4 again turns that race into already_stored.
+const waitOrStored = async (company, date, step) => result((await stored(company, date, step)) ? 'already_stored' : 'wait_10min');
+
 const rowFields = (e) => ({ logDt: e.log_dt, useSe: e.use_se, sysUser: e.sys_user, conectIp: e.conect_ip, dataUsgqty: '0' });
 const rowResponse = (e) => (e.http_status === null && !e.result_code ? null : {
     http: e.http_status === null ? null : Number(e.http_status), code: e.result_code, message: e.result_msg, detail: e.result_detail, at: e.recptn_dt,
@@ -126,7 +130,7 @@ export async function sendStep(request) {
     const prev = previousStep(step.step);
     if (prev && (await normalSaveCount(company, date, prev.useSe)) === 0) return result('previous_missing');
     if (await stored(company, date, step)) return result('already_stored');
-    if (await recent(company)) return result('wait_10min');
+    if (await recent(company)) return waitOrStored(company, date, step);
 
     const key = keyOf(company.code);
     if (!key) throw new Error(`${company.keyEnv} 가 비어 있다`);
@@ -142,7 +146,7 @@ export async function sendStep(request) {
         if (!locked) return result('in_progress');
         // Re-check under the claim: another sender may have finished between the checks and the claim.
         if (await stored(company, date, step)) return result('already_stored');
-        if (await recent(company)) return result('wait_10min');
+        if (await recent(company)) return waitOrStored(company, date, step);
 
         const at = now();
         if (kstDate(at) !== date) return result('past_day');
