@@ -22,7 +22,7 @@
 | 열 | 타입 | 뜻 |
 |---|---|---|
 | `id` | bigserial | 행 식별 |
-| `sent_at` | timestamptz | 행을 쓴 시각(DB 기본값 now()) |
+| `sent_at` | timestamptz | 요청 시각. 쓰는 쪽이 넣지 않으면 DB 기본값 now() |
 | `test` | boolean | DO6999 시험 전송이면 참 |
 | `use_se` | varchar(10) | 사용 구분 코드 |
 | `log_dt` | varchar(23) | 보낸 로그 일시(KST 문자열) |
